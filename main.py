@@ -8,7 +8,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from loguru import logger
 
 import config
-from bot.handlers import start
+from bot.handlers import start, menu
+from bot.handlers import trade_wizard
 from bot.middlewares.owner_check import OwnerCheckMiddleware
 from storage.user_settings import create_storage_instances
 
@@ -93,6 +94,8 @@ async def main():
     # Регистрация роутеров
     logger.info("Registering handlers...")
     dp.include_router(start.router)
+    dp.include_router(menu.router)
+    dp.include_router(trade_wizard.router)
 
     # Запуск бота
     logger.info("Starting bot...")

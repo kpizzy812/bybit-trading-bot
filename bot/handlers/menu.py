@@ -1,0 +1,182 @@
+"""
+Базовые обработчики для кнопок главного меню
+"""
+from aiogram import Router, F
+from aiogram.types import Message
+from aiogram.fsm.context import FSMContext
+
+from bot.states.trade_states import TradeStates
+from bot.keyboards.main_menu import get_main_menu
+import config
+
+router = Router()
+
+
+@router.message(F.text == "➕ Открыть сделку")
+async def open_trade_handler(message: Message, state: FSMContext):
+    """Запуск Trade Wizard"""
+    # Импорт здесь для избежания circular import
+    from bot.keyboards.trade_kb import get_symbol_keyboard
+
+    await state.set_state(TradeStates.choosing_symbol)
+
+    await message.answer(
+        "📊 <b>Выбери инструмент для торговли:</b>\n\n"
+        f"Доступные символы: {', '.join(config.SUPPORTED_SYMBOLS)}",
+        reply_markup=get_symbol_keyboard()
+    )
+
+
+@router.message(F.text == "📊 Позиции")
+async def positions_handler(message: Message, settings_storage, lock_manager):
+    """Показать открытые позиции"""
+    # Получаем настройки пользователя
+    user_settings = await settings_storage.get_settings(message.from_user.id)
+    testnet = user_settings.get('testnet_mode', config.DEFAULT_TESTNET_MODE)
+
+    try:
+        from services.bybit import BybitClient
+
+        client = BybitClient(testnet=testnet)
+        positions = await client.get_positions()
+
+        if not positions:
+            await message.answer(
+                "📊 <b>Открытых позиций нет</b>\n\n"
+                "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю",
+                reply_markup=get_main_menu()
+            )
+            return
+
+        # Формируем список позиций
+        text = "📊 <b>Твои открытые позиции:</b>\n\n"
+
+        for pos in positions:
+            symbol = pos.get('symbol')
+            side = pos.get('side')  # Buy/Sell
+            size = float(pos.get('size', 0))
+            entry_price = float(pos.get('avgPrice', 0))
+            mark_price = float(pos.get('markPrice', 0))
+            unrealized_pnl = float(pos.get('unrealisedPnl', 0))
+            leverage = pos.get('leverage', '?')
+            liq_price = pos.get('liqPrice', 'N/A')
+
+            # Рассчитываем ROE%
+            roe = 0
+            if entry_price > 0:
+                roe = (unrealized_pnl / (size * entry_price)) * float(leverage) * 100
+
+            # Эмодзи для направления
+            side_emoji = "🟢" if side == "Buy" else "🔴"
+            pnl_emoji = "💰" if unrealized_pnl >= 0 else "📉"
+
+            text += (
+                f"{side_emoji} <b>{symbol}</b> {side}\n"
+                f"  Size: {size} | Leverage: {leverage}x\n"
+                f"  Entry: ${entry_price:.4f} | Mark: ${mark_price:.4f}\n"
+                f"  {pnl_emoji} PnL: ${unrealized_pnl:.2f} ({roe:+.2f}%)\n"
+                f"  Liq: ${liq_price}\n\n"
+            )
+
+        text += "\n💡 <i>Используй кнопки ниже для управления позициями</i>"
+
+        # TODO: Добавить inline кнопки для управления каждой позицией
+        await message.answer(text, reply_markup=get_main_menu())
+
+    except Exception as e:
+        await message.answer(
+            f"❌ Ошибка при получении позиций:\n{str(e)}",
+            reply_markup=get_main_menu()
+        )
+
+
+@router.message(F.text == "⚙️ Настройки")
+async def settings_handler(message: Message, settings_storage):
+    """Показать меню настроек"""
+    user_settings = await settings_storage.get_settings(message.from_user.id)
+
+    # Формируем текст с текущими настройками
+    testnet_mode = user_settings.get('testnet_mode', config.DEFAULT_TESTNET_MODE)
+    default_risk = user_settings.get('default_risk_usd', config.DEFAULT_RISK_USD)
+    default_leverage = user_settings.get('default_leverage', config.DEFAULT_LEVERAGE)
+    default_margin_mode = user_settings.get('default_margin_mode', config.DEFAULT_MARGIN_MODE)
+    shorts_enabled = user_settings.get('shorts_enabled', config.DEFAULT_SHORTS_ENABLED)
+    default_tp_mode = user_settings.get('default_tp_mode', config.DEFAULT_TP_MODE)
+
+    mode_text = "🧪 <b>Testnet</b>" if testnet_mode else "🔴 <b>Live Trading</b>"
+    shorts_text = "✅ Включены" if shorts_enabled else "❌ Выключены"
+
+    text = f"""
+⚙️ <b>Текущие настройки:</b>
+
+🌐 <b>Режим:</b> {mode_text}
+💰 <b>Дефолтный риск:</b> ${default_risk}
+📊 <b>Дефолтное плечо:</b> {default_leverage}x
+🔀 <b>Режим маржи:</b> {default_margin_mode}
+🔴 <b>Шорты:</b> {shorts_text}
+🎯 <b>TP режим:</b> {default_tp_mode}
+
+<b>Лимиты безопасности:</b>
+🛡 Макс. риск на сделку: ${config.MAX_RISK_PER_TRADE}
+🛡 Макс. маржа на сделку: ${config.MAX_MARGIN_PER_TRADE}
+🛡 Макс. плечо: {config.MAX_LEVERAGE}x
+
+💡 <i>Используй inline кнопки для изменения настроек</i>
+"""
+
+    # TODO: Добавить inline кнопки для изменения каждой настройки
+    await message.answer(text, reply_markup=get_main_menu())
+
+
+@router.message(F.text == "🧾 История")
+async def history_handler(message: Message):
+    """Показать историю сделок"""
+    # TODO: Реализовать получение истории из БД
+    await message.answer(
+        "🧾 <b>История сделок</b>\n\n"
+        "⚠️ Функция в разработке...\n\n"
+        "Здесь будет:\n"
+        "• История закрытых сделок\n"
+        "• Общая статистика (винрейт, PnL)\n"
+        "• Фильтры по символам и датам",
+        reply_markup=get_main_menu()
+    )
+
+
+@router.message(F.text == "🧪 Testnet/Live")
+async def toggle_mode_handler(message: Message, settings_storage):
+    """Переключение между Testnet и Live режимами"""
+    user_id = message.from_user.id
+    user_settings = await settings_storage.get_settings(user_id)
+
+    # Текущий режим
+    current_testnet = user_settings.get('testnet_mode', config.DEFAULT_TESTNET_MODE)
+
+    # Переключаем
+    new_testnet = not current_testnet
+
+    # Сохраняем
+    await settings_storage.update_setting(user_id, 'testnet_mode', new_testnet)
+
+    # Сообщение
+    if new_testnet:
+        await message.answer(
+            "🧪 <b>Testnet режим ВКЛЮЧЕН</b>\n\n"
+            "✅ Все сделки будут выполняться на testnet\n"
+            "✅ Используй testnet баланс для тестирования\n"
+            "✅ Реальные деньги не затрагиваются\n\n"
+            "⚠️ Убедись, что в .env установлены BYBIT_TESTNET_API_KEY и BYBIT_TESTNET_API_SECRET",
+            reply_markup=get_main_menu()
+        )
+    else:
+        await message.answer(
+            "🔴 <b>LIVE TRADING режим ВКЛЮЧЕН</b>\n\n"
+            "⚠️⚠️⚠️ <b>ВНИМАНИЕ!</b> ⚠️⚠️⚠️\n\n"
+            "Сейчас используется РЕАЛЬНЫЙ баланс!\n"
+            "Все сделки будут выполняться с реальными деньгами!\n\n"
+            "✅ Убедись, что твой API ключ имеет ТОЛЬКО права Trade (БЕЗ Withdraw!)\n"
+            "✅ Проверь лимиты безопасности в настройках\n"
+            "✅ Начни с малых позиций\n\n"
+            "Используй <b>🧪 Testnet/Live</b> чтобы вернуться в testnet",
+            reply_markup=get_main_menu()
+        )

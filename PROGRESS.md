@@ -469,11 +469,51 @@ futures-bot/
 
 ## Current Session Progress
 
-### Session 1 (2025-12-15)
-- [x] Изучено ТЗ
-- [x] Создан PROGRESS.md для отслеживания разработки
-- [ ] В процессе: Создание базовой структуры проекта
-- [ ] Следующее: Настройка Bybit API client
+### Session 1 (2025-12-15) - MVP Core Implementation
+- [x] Изучено ТЗ и создан PROGRESS.md
+- [x] Создана базовая структура проекта
+- [x] Изучена Bybit V5 API документация
+- [x] Реализован Bybit API client с V5 поддержкой:
+  - get_tickers, get_instrument_info, get_wallet_balance
+  - set_leverage, place_order, get_order, wait_until_filled
+  - set_trading_stop, get_positions, close_position
+  - place_ladder_tp (для ladder TP через limit orders)
+- [x] Реализован Risk Calculator с правильными формулами
+- [x] Создана модульная архитектура Trade Wizard:
+  - bot/handlers/trade_wizard/ (модульная структура)
+  - 8 модулей: utils, navigation, symbol_side, entry, stop, risk_leverage, take_profit, confirmation
+- [x] Реализован полный FSM wizard со Stop по % (ключевая фича!)
+  - 📐 Stop % - пресеты 0.8%, 1%, 1.5%, 2%, 2.5%, custom
+  - ✍️ Stop вручную - для структурных уровней
+  - 🤖 AI сценарии - placeholder для будущего
+- [x] Реализованы базовые хендлеры для всех Reply кнопок меню
+- [x] Создан user settings storage с Redis/in-memory fallback
+- [x] Добавлена race condition protection через lock_manager
+
+### Что работает сейчас:
+✅ Бот запускается и отвечает на /start
+✅ Все кнопки главного меню работают
+✅ Полный FSM wizard для Trade (8 шагов)
+✅ Stop по % - быстрая установка стопа без расчётов
+✅ Все валидации на каждом шаге
+✅ Testnet/Live переключение
+✅ **Trade Execution - ПОЛНОСТЬЮ РЕАЛИЗОВАН!**
+  - Pre-flight checks (balance validation)
+  - Risk calculation & margin validation
+  - Leverage setup
+  - Entry order (Market/Limit) с wait_until_filled
+  - Stop Loss с panic close при ошибке
+  - Take Profit (single/ladder/RR modes)
+  - Real avgPrice для Market orders
+  - Success message с реальными данными
+  - Полный error handling (BybitError, TimeoutError, RiskCalculationError)
+
+### Следующие шаги:
+- [ ] **Тестирование Trade Execution на Testnet** (КРИТИЧНО!)
+- [ ] Добавить Position Monitoring с real-time updates
+- [ ] Реализовать Settings management (inline кнопки)
+- [ ] Добавить Trade History и Statistics
+- [ ] AI сценарии integration (опционально)
 
 ---
 
