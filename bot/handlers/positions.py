@@ -114,7 +114,7 @@ async def show_position_detail(callback: CallbackQuery, settings_storage):
 # ============================================================
 
 @router.callback_query(F.data.startswith("pos_partial:"))
-async def partial_close_position(callback: CallbackQuery, settings_storage):
+async def partial_close_position(callback: CallbackQuery, settings_storage, trade_logger):
     """Частичное закрытие позиции"""
     # Парсим: pos_partial:SYMBOL:PERCENT
     parts = callback.data.split(":")
@@ -130,15 +130,41 @@ async def partial_close_position(callback: CallbackQuery, settings_storage):
     try:
         client = BybitClient(testnet=testnet)
 
+        # Получаем позицию ДО закрытия для PnL
+        positions_before = await client.get_positions(symbol=symbol)
+        if positions_before:
+            position = positions_before[0]
+            unrealized_pnl_total = float(position.get('unrealisedPnl', 0))
+            mark_price = float(position.get('markPrice', 0))
+
+            # PnL пропорционально закрытой части
+            partial_pnl = unrealized_pnl_total * (percent / 100)
+        else:
+            mark_price = 0
+            partial_pnl = 0
+
         # Выполняем partial close
         result = await client.partial_close(symbol=symbol, percent=percent)
+
+        # Логируем частичное закрытие
+        try:
+            await trade_logger.update_trade_on_close(
+                user_id=user_id,
+                symbol=symbol,
+                exit_price=mark_price,
+                pnl_usd=partial_pnl,
+                is_partial=True
+            )
+        except Exception as log_error:
+            logger.error(f"Failed to log partial close: {log_error}")
 
         # Успешное закрытие
         await callback.message.edit_text(
             f"✅ <b>Позиция частично закрыта!</b>\n\n"
             f"Symbol: {symbol}\n"
             f"Закрыто: {result['closed_qty']} ({percent}%)\n"
-            f"Было: {result['total_size']}\n\n"
+            f"Было: {result['total_size']}\n"
+            f"PnL: ${partial_pnl:+.2f}\n\n"
             f"💡 Используй <b>📊 Позиции</b> чтобы проверить текущее состояние",
             reply_markup=get_main_menu()
         )
@@ -174,7 +200,7 @@ async def close_position_confirmation(callback: CallbackQuery):
 
 
 @router.callback_query(F.data.startswith("pos_close_confirm:"))
-async def close_position_confirmed(callback: CallbackQuery, settings_storage):
+async def close_position_confirmed(callback: CallbackQuery, settings_storage, trade_logger):
     """Закрытие позиции после подтверждения"""
     # Парсим: pos_close_confirm:SYMBOL:PERCENT
     parts = callback.data.split(":")
@@ -190,17 +216,55 @@ async def close_position_confirmed(callback: CallbackQuery, settings_storage):
     try:
         client = BybitClient(testnet=testnet)
 
+        # Получаем позицию ДО закрытия для PnL
+        positions_before = await client.get_positions(symbol=symbol)
+        if positions_before:
+            position = positions_before[0]
+            unrealized_pnl = float(position.get('unrealisedPnl', 0))
+            mark_price = float(position.get('markPrice', 0))
+        else:
+            unrealized_pnl = 0
+            mark_price = 0
+
         if percent == 100:
             # Полное закрытие
             await client.close_position(symbol=symbol)
-            msg = f"✅ <b>Позиция {symbol} закрыта!</b>"
+
+            # Логируем полное закрытие
+            try:
+                await trade_logger.update_trade_on_close(
+                    user_id=user_id,
+                    symbol=symbol,
+                    exit_price=mark_price,
+                    pnl_usd=unrealized_pnl,
+                    is_partial=False
+                )
+            except Exception as log_error:
+                logger.error(f"Failed to log full close: {log_error}")
+
+            msg = f"✅ <b>Позиция {symbol} закрыта!</b>\nPnL: ${unrealized_pnl:+.2f}"
         else:
             # Partial close
+            partial_pnl = unrealized_pnl * (percent / 100)
             result = await client.partial_close(symbol=symbol, percent=percent)
+
+            # Логируем частичное закрытие
+            try:
+                await trade_logger.update_trade_on_close(
+                    user_id=user_id,
+                    symbol=symbol,
+                    exit_price=mark_price,
+                    pnl_usd=partial_pnl,
+                    is_partial=True
+                )
+            except Exception as log_error:
+                logger.error(f"Failed to log partial close: {log_error}")
+
             msg = (
                 f"✅ <b>Позиция частично закрыта!</b>\n\n"
                 f"Symbol: {symbol}\n"
-                f"Закрыто: {result['closed_qty']} ({percent}%)"
+                f"Закрыто: {result['closed_qty']} ({percent}%)\n"
+                f"PnL: ${partial_pnl:+.2f}"
             )
 
         await callback.message.edit_text(
@@ -316,7 +380,7 @@ async def panic_close_all_confirmation(callback: CallbackQuery):
 
 
 @router.callback_query(F.data == "pos_panic_confirm")
-async def panic_close_all_execute(callback: CallbackQuery, settings_storage):
+async def panic_close_all_execute(callback: CallbackQuery, settings_storage, trade_logger):
     """Выполнение Panic Close All"""
     await callback.answer("🧯 Закрываю все позиции...")
 
@@ -343,9 +407,25 @@ async def panic_close_all_execute(callback: CallbackQuery, settings_storage):
 
         for position in positions:
             symbol = position.get('symbol')
+            unrealized_pnl = float(position.get('unrealisedPnl', 0))
+            mark_price = float(position.get('markPrice', 0))
+
             try:
                 await client.close_position(symbol=symbol)
-                closed_symbols.append(symbol)
+                closed_symbols.append(f"{symbol} (${unrealized_pnl:+.2f})")
+
+                # Логируем закрытие
+                try:
+                    await trade_logger.update_trade_on_close(
+                        user_id=user_id,
+                        symbol=symbol,
+                        exit_price=mark_price,
+                        pnl_usd=unrealized_pnl,
+                        is_partial=False
+                    )
+                except Exception as log_error:
+                    logger.error(f"Failed to log panic close for {symbol}: {log_error}")
+
                 logger.info(f"Panic closed: {symbol}")
             except Exception as e:
                 logger.error(f"Error panic closing {symbol}: {e}")

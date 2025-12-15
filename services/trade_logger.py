@@ -192,6 +192,80 @@ class TradeLogger:
 
         return trades
 
+    async def update_trade_on_close(
+        self,
+        user_id: int,
+        symbol: str,
+        exit_price: float,
+        pnl_usd: float,
+        closed_qty: float = None,
+        is_partial: bool = False
+    ):
+        """
+        Обновить сделку при закрытии позиции
+
+        Args:
+            user_id: ID пользователя
+            symbol: Символ закрытой позиции
+            exit_price: Цена закрытия
+            pnl_usd: PnL в USD
+            closed_qty: Закрытое количество (для partial)
+            is_partial: Частичное закрытие или полное
+        """
+        # Получаем все сделки пользователя
+        all_trades = await self.get_trades(user_id, limit=100)
+
+        # Ищем последнюю открытую сделку по символу
+        target_trade = None
+        for trade in all_trades:
+            if trade.symbol == symbol and trade.status in ["open", "partial"]:
+                target_trade = trade
+                break
+
+        if not target_trade:
+            logger.warning(f"No open trade found for {symbol} (user {user_id})")
+            return
+
+        # Обновляем данные
+        target_trade.exit_price = exit_price
+        target_trade.pnl_usd = (target_trade.pnl_usd or 0) + pnl_usd
+
+        # Рассчитываем outcome
+        if target_trade.pnl_usd > 0:
+            target_trade.outcome = "win"
+        elif target_trade.pnl_usd < 0:
+            target_trade.outcome = "loss"
+        else:
+            target_trade.outcome = "breakeven"
+
+        # Рассчитываем ROE% и actual RR
+        if target_trade.entry_price > 0 and target_trade.qty > 0:
+            # ROE = (PnL / (qty * entry)) * leverage * 100
+            position_value = target_trade.qty * target_trade.entry_price
+            target_trade.roe_percent = (target_trade.pnl_usd / position_value) * target_trade.leverage * 100
+
+            # Actual RR
+            if target_trade.risk_usd > 0:
+                target_trade.rr_actual = target_trade.pnl_usd / target_trade.risk_usd
+
+        # PnL %
+        if target_trade.risk_usd > 0:
+            target_trade.pnl_percent = (target_trade.pnl_usd / target_trade.risk_usd) * 100
+
+        # Обновляем статус
+        if is_partial:
+            target_trade.status = "partial"
+        else:
+            target_trade.status = "closed"
+
+        # Обновляем timestamp закрытия
+        target_trade.timestamp = datetime.utcnow().isoformat()
+
+        # Сохраняем обновленную запись
+        await self.log_trade(target_trade)
+
+        logger.info(f"Trade updated on close: {target_trade.trade_id} (PnL: ${pnl_usd:+.2f})")
+
     async def get_statistics(self, user_id: int, limit: int = 100) -> Dict:
         """
         Получить статистику по сделкам
