@@ -192,7 +192,8 @@ class PositionMonitor:
                 symbol=snapshot.symbol,
                 exit_price=exit_price,
                 pnl_usd=pnl_usd,
-                is_partial=False
+                is_partial=False,
+                testnet=self.testnet
             )
         except Exception as e:
             logger.error(f"Failed to log closed position: {e}")
@@ -234,7 +235,8 @@ class PositionMonitor:
                 exit_price=exit_price,
                 pnl_usd=partial_pnl,
                 closed_qty=closed_size,
-                is_partial=True
+                is_partial=True,
+                testnet=self.testnet
             )
         except Exception as e:
             logger.error(f"Failed to log partial close: {e}")
@@ -261,8 +263,8 @@ class PositionMonitor:
         if snapshot.stop_loss and snapshot.stop_loss != '':
             try:
                 sl_price = float(snapshot.stop_loss)
-                # Если цена в пределах 0.5% от SL, считаем что сработал SL
-                tolerance = sl_price * 0.005
+                # Если цена в пределах 0.1% от SL, считаем что сработал SL
+                tolerance = sl_price * 0.001
                 if abs(exit_price - sl_price) <= tolerance:
                     return "Stop Loss"
             except (ValueError, TypeError):
@@ -272,8 +274,8 @@ class PositionMonitor:
         if snapshot.take_profit and snapshot.take_profit != '':
             try:
                 tp_price = float(snapshot.take_profit)
-                # Если цена в пределах 0.5% от TP
-                tolerance = tp_price * 0.005
+                # Если цена в пределах 0.1% от TP
+                tolerance = tp_price * 0.001
                 if abs(exit_price - tp_price) <= tolerance:
                     return "Take Profit"
             except (ValueError, TypeError):
