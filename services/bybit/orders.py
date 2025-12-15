@@ -20,10 +20,20 @@ class OrdersMixin:
         price: Optional[str] = None,
         client_order_id: Optional[str] = None,
         reduce_only: bool = False,
-        close_on_trigger: bool = False
+        close_on_trigger: bool = False,
+        stop_loss: Optional[str] = None,
+        take_profit: Optional[str] = None,
+        sl_trigger_by: str = "MarkPrice",
+        tp_trigger_by: str = "MarkPrice"
     ) -> Dict:
         """
         Разместить ордер
+
+        Args:
+            stop_loss: Цена стоп-лосса (опционально)
+            take_profit: Цена тейк-профита (опционально)
+            sl_trigger_by: Тип триггера SL (MarkPrice, LastPrice, IndexPrice)
+            tp_trigger_by: Тип триггера TP (MarkPrice, LastPrice, IndexPrice)
 
         Returns:
             {'orderId': '...', 'orderLinkId': '...', ...}
@@ -55,10 +65,25 @@ class OrdersMixin:
             if close_on_trigger:
                 params['closeOnTrigger'] = True
 
+            # SL/TP для ордера (будет активирован при исполнении)
+            if stop_loss:
+                params['stopLoss'] = stop_loss
+                params['slTriggerBy'] = sl_trigger_by
+
+            if take_profit:
+                params['takeProfit'] = take_profit
+                params['tpTriggerBy'] = tp_trigger_by
+
             response = self.client.place_order(**params)
             result = self._handle_response(response)
 
-            logger.info(f"Order placed: {order_type} {side} {qty} {symbol} @ {price or 'market'}")
+            sl_tp_info = ""
+            if stop_loss:
+                sl_tp_info += f" SL={stop_loss}"
+            if take_profit:
+                sl_tp_info += f" TP={take_profit}"
+
+            logger.info(f"Order placed: {order_type} {side} {qty} {symbol} @ {price or 'market'}{sl_tp_info}")
             return result
 
         except Exception as e:

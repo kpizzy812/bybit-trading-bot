@@ -31,6 +31,7 @@ class PendingOrder:
         self.targets = order_data.get('targets', [])
         self.leverage = order_data.get('leverage', 5)
         self.user_id = order_data['user_id']
+        self.sl_already_set = order_data.get('sl_already_set', False)  # SL уже на ордере
         self.created_at = datetime.utcnow()
 
 
@@ -157,34 +158,63 @@ class OrderMonitor:
 
             # 1. Зарегистрировать вход в позицию в trade_logger
             try:
-                # Рассчитать риск
+                from datetime import datetime as dt
+                from services.trade_logger import TradeRecord
+                import uuid
+
                 actual_risk = abs(actual_entry_price - order.stop_price) * actual_qty
 
-                # Рассчитать маржу
-                margin = (actual_entry_price * actual_qty) / order.leverage
+                # TP price для лога
+                tp_price_for_log = None
+                rr_planned = None
+                if order.targets:
+                    tp_price_for_log = order.targets[0].get("price")
+                    rrs = []
+                    for t in order.targets:
+                        tp = t.get("price", 0)
+                        if order.stop_price != actual_entry_price:
+                            rr = abs(tp - actual_entry_price) / abs(actual_entry_price - order.stop_price)
+                            rrs.append(rr)
+                    if rrs:
+                        rr_planned = sum(rrs) / len(rrs)
 
-                await self.trade_logger.log_entry(
+                trade_record = TradeRecord(
+                    trade_id=str(uuid.uuid4()),
                     user_id=user_id,
+                    timestamp=dt.utcnow().isoformat(),
                     symbol=order.symbol,
                     side=order.side,
                     entry_price=actual_entry_price,
+                    exit_price=None,
                     qty=actual_qty,
                     leverage=order.leverage,
-                    stop_loss=order.stop_price,
+                    margin_mode="cross",
+                    stop_price=order.stop_price,
+                    tp_price=tp_price_for_log,
                     risk_usd=actual_risk,
-                    margin_usd=margin
+                    pnl_usd=None,
+                    pnl_percent=None,
+                    roe_percent=None,
+                    outcome=None,
+                    rr_planned=rr_planned,
+                    rr_actual=None,
+                    status="open"
                 )
+                await self.trade_logger.log_trade(trade_record)
                 logger.info(f"Trade entry logged for {order.symbol} @ ${actual_entry_price:.2f}")
             except Exception as log_error:
                 logger.error(f"Failed to log trade entry: {log_error}")
 
-            # 2. Установить Stop Loss
-            await self.client.set_trading_stop(
-                symbol=order.symbol,
-                stop_loss=str(order.stop_price),
-                sl_trigger_by="MarkPrice"
-            )
-            logger.info(f"SL set at ${order.stop_price:.2f} for {order.symbol}")
+            # 2. Установить Stop Loss (если не был уже установлен на ордере)
+            if not order.sl_already_set:
+                await self.client.set_trading_stop(
+                    symbol=order.symbol,
+                    stop_loss=str(order.stop_price),
+                    sl_trigger_by="MarkPrice"
+                )
+                logger.info(f"SL set at ${order.stop_price:.2f} for {order.symbol}")
+            else:
+                logger.info(f"SL already on order for {order.symbol}, skipping")
 
             # 3. Установить ladder Take Profit
             tp_success = True
@@ -272,13 +302,14 @@ class OrderMonitor:
 """
 
             # Статус установки SL/TP
+            sl_status = "✅ SL на ордере" if order.sl_already_set else "✅ SL установлен"
             if order.targets:
                 if tp_success:
-                    message += "<i>✅ SL/TP установлены автоматически</i>\n"
+                    message += f"<i>{sl_status}, TP ордера размещены</i>\n"
                 else:
-                    message += "<i>⚠️ SL установлен, но ошибка при установке TP!</i>\n<i>Проверь позицию вручную!</i>\n"
+                    message += f"<i>{sl_status}, но ошибка при установке TP!</i>\n<i>Проверь позицию вручную!</i>\n"
             else:
-                message += "<i>✅ SL установлен автоматически</i>\n"
+                message += f"<i>{sl_status}</i>\n"
 
             message += f"\n⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
 

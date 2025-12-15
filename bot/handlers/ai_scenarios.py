@@ -531,7 +531,10 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
             actual_qty = float(filled_order['qty'])
         else:
             # Limit order - размещаем БЕЗ ожидания fill
-            entry_price_str = round_price(entry_price, position_calc.get('instrument_info', {}).get('tickSize', '0.01'))
+            # SL ставим сразу на ордер, TP будет через ladder после исполнения
+            tick_size = position_calc.get('instrument_info', {}).get('tickSize', '0.01')
+            entry_price_str = round_price(entry_price, tick_size)
+            stop_price_str = round_price(stop_price, tick_size)
 
             entry_order = await bybit.place_order(
                 symbol=symbol,
@@ -539,12 +542,13 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                 order_type="Limit",
                 qty=qty,
                 price=entry_price_str,
-                client_order_id=f"{trade_id}_entry"[:36]
+                client_order_id=f"{trade_id}_entry"[:36],
+                stop_loss=stop_price_str  # SL сразу на ордер!
             )
 
             order_id = entry_order['orderId']
 
-            # Регистрируем ордер для мониторинга и автоматической установки SL/TP
+            # Регистрируем ордер для мониторинга и автоматической установки ladder TP
             order_monitor.register_order({
                 'order_id': order_id,
                 'symbol': symbol,
@@ -555,9 +559,10 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                 'stop_price': stop_price,
                 'targets': targets,
                 'leverage': leverage,
-                'user_id': user_id
+                'user_id': user_id,
+                'sl_already_set': True  # SL уже на ордере
             })
-            logger.info(f"Order {order_id} registered with OrderMonitor for auto SL/TP")
+            logger.info(f"Order {order_id} registered with OrderMonitor for auto ladder TP (SL on order)")
 
             # Для limit order не ждём fill - показываем success и выходим
             success_text = f"""
