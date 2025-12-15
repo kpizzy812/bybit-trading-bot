@@ -199,7 +199,8 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
             required_margin=margin_required,
             actual_risk_usd=position_calc['actual_risk_usd'],
             max_risk_per_trade=max_risk,
-            max_margin_per_trade=max_margin
+            max_margin_per_trade=max_margin,
+            trading_capital=settings.trading_capital_usd  # Фиксированный капитал для Manual режима
         )
 
         if not is_valid:
