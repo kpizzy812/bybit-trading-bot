@@ -41,7 +41,10 @@ async def positions_handler(message: Message, settings_storage, lock_manager):
 
         client = BybitClient(testnet=testnet)
         positions = await client.get_positions()
-        orders = await client.get_open_orders()
+        all_orders = await client.get_open_orders()
+
+        # Фильтруем только entry ордера (не reduce_only, которые являются TP)
+        orders = [o for o in all_orders if not o.get('reduceOnly', False)]
 
         if not positions and not orders:
             await message.answer(

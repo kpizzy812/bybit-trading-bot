@@ -43,7 +43,10 @@ async def refresh_positions(callback: CallbackQuery, settings_storage):
     try:
         client = BybitClient(testnet=testnet)
         positions = await client.get_positions()
-        orders = await client.get_open_orders()
+        all_orders = await client.get_open_orders()
+
+        # Фильтруем только entry ордера (не reduce_only, которые являются TP)
+        orders = [o for o in all_orders if not o.get('reduceOnly', False)]
 
         if not positions and not orders:
             await callback.message.edit_text(
@@ -585,7 +588,10 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage):
     try:
         client = BybitClient(testnet=testnet)
         positions = await client.get_positions()
-        orders = await client.get_open_orders()
+        all_orders = await client.get_open_orders()
+
+        # Фильтруем только entry ордера (не reduce_only, которые являются TP)
+        orders = [o for o in all_orders if not o.get('reduceOnly', False)]
 
         if not positions and not orders:
             await callback.message.edit_text(
