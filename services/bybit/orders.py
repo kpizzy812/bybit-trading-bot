@@ -168,3 +168,40 @@ class OrdersMixin:
         except Exception as e:
             logger.error(f"Error cancelling order: {e}")
             raise BybitError(f"Failed to cancel order: {str(e)}")
+
+    async def get_order_history(
+        self,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        limit: int = 1
+    ) -> Optional[Dict]:
+        """
+        Получить информацию об ордере из истории
+
+        Returns:
+            Order info dict или None если не найден
+        """
+        try:
+            params = {
+                'category': config.BYBIT_CATEGORY,
+                'symbol': symbol,
+                'limit': limit
+            }
+
+            if order_id:
+                params['orderId'] = order_id
+            elif client_order_id:
+                params['orderLinkId'] = client_order_id
+
+            response = self.client.get_order_history(**params)
+            result = self._handle_response(response)
+
+            if not result.get('list'):
+                return None
+
+            return result['list'][0]
+
+        except Exception as e:
+            logger.error(f"Error getting order history: {e}")
+            return None

@@ -14,6 +14,7 @@ from bot.middlewares.owner_check import OwnerCheckMiddleware
 from storage.user_settings import create_storage_instances
 from services.trade_logger import create_trade_logger
 from services.position_monitor import create_position_monitor
+from services.order_monitor import create_order_monitor
 
 
 class InterceptHandler(logging.Handler):
@@ -104,12 +105,24 @@ async def main():
     # Запускаем мониторинг
     await position_monitor.start()
 
+    # Инициализация order monitor
+    logger.info("Initializing order monitor...")
+    order_monitor = create_order_monitor(
+        bot=bot,
+        testnet=config.DEFAULT_TESTNET_MODE,
+        check_interval=10  # Проверяем ордера каждые 10 секунд
+    )
+
+    # Запускаем order monitor
+    await order_monitor.start()
+
     # Сохраняем в workflow_data для доступа из хэндлеров
     dp.workflow_data.update({
         'settings_storage': settings_storage,
         'lock_manager': lock_manager,
         'trade_logger': trade_logger,
-        'position_monitor': position_monitor
+        'position_monitor': position_monitor,
+        'order_monitor': order_monitor
     })
 
     # Регистрация middleware
@@ -143,6 +156,7 @@ async def main():
         # Закрытие соединений
         logger.info("Shutting down...")
         await position_monitor.stop()
+        await order_monitor.stop()
         await settings_storage.close()
         await lock_manager.close()
         await trade_logger.close()

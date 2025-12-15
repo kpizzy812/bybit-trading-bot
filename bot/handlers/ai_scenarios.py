@@ -383,7 +383,7 @@ async def show_trade_confirmation(message: Message, scenario: dict, symbol: str,
 
 
 @router.callback_query(AIScenarioStates.confirmation, F.data.startswith("ai:confirm:"))
-async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_storage, lock_manager, trade_logger):
+async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_storage, lock_manager, trade_logger, order_monitor):
     """Выполнить сделку на основе AI сценария"""
     user_id = callback.from_user.id
 
@@ -542,6 +542,21 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 
             order_id = entry_order['orderId']
 
+            # Регистрируем ордер для мониторинга и автоматической установки SL/TP
+            order_monitor.register_order({
+                'order_id': order_id,
+                'symbol': symbol,
+                'side': side,
+                'order_side': order_side,
+                'qty': qty,
+                'entry_price': entry_price,
+                'stop_price': stop_price,
+                'targets': targets,
+                'leverage': leverage,
+                'user_id': user_id
+            })
+            logger.info(f"Order {order_id} registered with OrderMonitor for auto SL/TP")
+
             # Для limit order не ждём fill - показываем success и выходим
             success_text = f"""
 ✅ <b>Лимитный ордер размещён!</b>
@@ -573,9 +588,6 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 
             logger.info(f"AI Limit order placed: {symbol} {side} @ ${entry_price:.2f}, order_id: {order_id}")
             return
-
-            # TODO: Сохранить информацию о pending order для order_monitor
-            # TODO: Order monitor будет отслеживать fill и автоматически ставить SL/TP
 
         # Код ниже выполняется только для Market orders
         actual_entry_price = float(filled_order['avgPrice'])
