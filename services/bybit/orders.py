@@ -42,7 +42,12 @@ class OrdersMixin:
                 params['price'] = price
 
             if client_order_id:
-                params['orderLinkId'] = client_order_id[:36]  # Max 36 chars
+                # Max 36 chars, но сохраняем конец (суффикс _tp1, _tp2 важен)
+                if len(client_order_id) > 36:
+                    # Обрезаем UUID часть, сохраняя суффикс
+                    params['orderLinkId'] = client_order_id[:30] + client_order_id[-6:]
+                else:
+                    params['orderLinkId'] = client_order_id
 
             if reduce_only:
                 params['reduceOnly'] = True

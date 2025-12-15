@@ -285,72 +285,78 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
         # ===== 9. Take Profit =====
         await callback.message.edit_text("🎯 <b>Установка Take Profit...</b>")
 
+        tp_success = True
         stop_distance = abs(actual_entry_price - stop_price)
 
-        if tp_mode == "single":
-            # Single TP - цена указана пользователем
-            tp_price = data.get('tp_price')
-            await bybit.set_trading_stop(
-                symbol=symbol,
-                take_profit=str(tp_price),
-                tp_trigger_by="MarkPrice"
-            )
-            logger.info(f"Single TP set at ${tp_price:.4f}")
+        try:
+            if tp_mode == "single":
+                # Single TP - цена указана пользователем
+                tp_price = data.get('tp_price')
+                await bybit.set_trading_stop(
+                    symbol=symbol,
+                    take_profit=str(tp_price),
+                    tp_trigger_by="MarkPrice"
+                )
+                logger.info(f"Single TP set at ${tp_price:.4f}")
 
-        elif tp_mode == "rr":
-            # TP по RR
-            tp_rr = data.get('tp_rr', 2.0)
+            elif tp_mode == "rr":
+                # TP по RR
+                tp_rr = data.get('tp_rr', 2.0)
 
-            if side == "Buy":
-                tp_price = actual_entry_price + (stop_distance * tp_rr)
-            else:
-                tp_price = actual_entry_price - (stop_distance * tp_rr)
+                if side == "Buy":
+                    tp_price = actual_entry_price + (stop_distance * tp_rr)
+                else:
+                    tp_price = actual_entry_price - (stop_distance * tp_rr)
 
-            # Округлить до tickSize
-            tp_price_str = round_price(tp_price, instrument_info['tickSize'])
+                # Округлить до tickSize
+                tp_price_str = round_price(tp_price, instrument_info['tickSize'])
 
-            await bybit.set_trading_stop(
-                symbol=symbol,
-                take_profit=tp_price_str,
-                tp_trigger_by="MarkPrice"
-            )
-            logger.info(f"RR TP set at ${tp_price_str} (RR {tp_rr})")
+                await bybit.set_trading_stop(
+                    symbol=symbol,
+                    take_profit=tp_price_str,
+                    tp_trigger_by="MarkPrice"
+                )
+                logger.info(f"RR TP set at ${tp_price_str} (RR {tp_rr})")
 
-        elif tp_mode == "ladder":
-            # Ladder TP - два уровня
-            tp_rr_1 = data.get('tp_rr_1', 2.0)
-            tp_rr_2 = data.get('tp_rr_2', 3.0)
+            elif tp_mode == "ladder":
+                # Ladder TP - два уровня
+                tp_rr_1 = data.get('tp_rr_1', 2.0)
+                tp_rr_2 = data.get('tp_rr_2', 3.0)
 
-            if side == "Buy":
-                tp1_price = actual_entry_price + (stop_distance * tp_rr_1)
-                tp2_price = actual_entry_price + (stop_distance * tp_rr_2)
-            else:
-                tp1_price = actual_entry_price - (stop_distance * tp_rr_1)
-                tp2_price = actual_entry_price - (stop_distance * tp_rr_2)
+                if side == "Buy":
+                    tp1_price = actual_entry_price + (stop_distance * tp_rr_1)
+                    tp2_price = actual_entry_price + (stop_distance * tp_rr_2)
+                else:
+                    tp1_price = actual_entry_price - (stop_distance * tp_rr_1)
+                    tp2_price = actual_entry_price - (stop_distance * tp_rr_2)
 
-            # Округлить цены
-            tick_size = instrument_info['tickSize']
-            tp1_price_str = round_price(tp1_price, tick_size)
-            tp2_price_str = round_price(tp2_price, tick_size)
+                # Округлить цены
+                tick_size = instrument_info['tickSize']
+                tp1_price_str = round_price(tp1_price, tick_size)
+                tp2_price_str = round_price(tp2_price, tick_size)
 
-            # Разделить qty пополам
-            qty_half = actual_qty / 2
-            qty_step = instrument_info['qtyStep']
+                # Разделить qty пополам
+                qty_half = actual_qty / 2
+                qty_step = instrument_info['qtyStep']
 
-            qty1 = round_qty(qty_half, qty_step, round_down=True)
-            qty2 = round_qty(actual_qty - float(qty1), qty_step, round_down=True)
+                qty1 = round_qty(qty_half, qty_step, round_down=True)
+                qty2 = round_qty(actual_qty - float(qty1), qty_step, round_down=True)
 
-            # Разместить ladder TP
-            await bybit.place_ladder_tp(
-                symbol=symbol,
-                position_side=side,
-                tp_levels=[
-                    {'price': tp1_price_str, 'qty': qty1},
-                    {'price': tp2_price_str, 'qty': qty2}
-                ],
-                client_order_id_prefix=trade_id
-            )
-            logger.info(f"Ladder TP set: TP1=${tp1_price_str} ({qty1}), TP2=${tp2_price_str} ({qty2})")
+                # Разместить ladder TP
+                await bybit.place_ladder_tp(
+                    symbol=symbol,
+                    position_side=side,
+                    tp_levels=[
+                        {'price': tp1_price_str, 'qty': qty1},
+                        {'price': tp2_price_str, 'qty': qty2}
+                    ],
+                    client_order_id_prefix=trade_id
+                )
+                logger.info(f"Ladder TP set: TP1=${tp1_price_str} ({qty1}), TP2=${tp2_price_str} ({qty2})")
+
+        except Exception as tp_error:
+            logger.error(f"Error setting Take Profit: {tp_error}", exc_info=True)
+            tp_success = False
 
         # ===== 10. Success! Получить liq price из позиции =====
         positions = await bybit.get_positions(symbol=symbol)
@@ -410,8 +416,12 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
 💵 <b>Margin:</b> ${margin_required:.2f}
 🔥 <b>Liq:</b> {liq_price}
 
-<i>✅ SL и TP установлены</i>
 """
+        # Добавляем статус установки SL/TP
+        if tp_success:
+            success_text += "<i>✅ SL и TP установлены</i>\n"
+        else:
+            success_text += "<i>⚠️ SL установлен, но ошибка при установке TP!</i>\n<i>Проверь позицию вручную!</i>\n"
 
         await callback.message.edit_text(success_text, reply_markup=None)
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())

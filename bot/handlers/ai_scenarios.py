@@ -14,9 +14,11 @@ import config
 from bot.states.trade_states import AIScenarioStates
 from bot.keyboards import ai_scenarios_kb
 from bot.keyboards.main_menu import get_main_menu
+from datetime import datetime
 from services.syntra_client import get_syntra_client, SyntraAPIError
 from services.bybit import BybitClient
 from services.risk_calculator import RiskCalculator
+from services.trade_logger import TradeRecord
 from utils.validators import round_qty, round_price
 
 router = Router()
@@ -596,18 +598,44 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 
         # Зарегистрировать вход в позицию в trade_logger
         try:
-            margin = (actual_entry_price * actual_qty) / leverage
-            await trade_logger.log_entry(
+            # TP price для лога - первый таргет или None
+            tp_price_for_log = None
+            rr_planned = None
+            if targets:
+                tp_price_for_log = targets[0].get("price")
+                # RR planned = avg of targets
+                rrs = []
+                for t in targets:
+                    tp = t.get("price", 0)
+                    if stop_price != actual_entry_price:
+                        rr = abs(tp - actual_entry_price) / abs(actual_entry_price - stop_price)
+                        rrs.append(rr)
+                if rrs:
+                    rr_planned = sum(rrs) / len(rrs)
+
+            trade_record = TradeRecord(
+                trade_id=trade_id,
                 user_id=user_id,
+                timestamp=datetime.utcnow().isoformat(),
                 symbol=symbol,
                 side=side,
                 entry_price=actual_entry_price,
+                exit_price=None,
                 qty=actual_qty,
                 leverage=leverage,
-                stop_loss=stop_price,
+                margin_mode=settings.default_margin_mode,
+                stop_price=stop_price,
+                tp_price=tp_price_for_log,
                 risk_usd=actual_risk,
-                margin_usd=margin
+                pnl_usd=None,
+                pnl_percent=None,
+                roe_percent=None,
+                outcome=None,
+                rr_planned=rr_planned,
+                rr_actual=None,
+                status="open"
             )
+            await trade_logger.log_trade(trade_record)
             logger.info(f"Trade entry logged for {symbol} @ ${actual_entry_price:.2f}")
         except Exception as log_error:
             logger.error(f"Failed to log trade entry: {log_error}")
