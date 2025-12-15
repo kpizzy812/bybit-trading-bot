@@ -126,15 +126,11 @@ class OrderMonitor:
         order = self.pending_orders[user_id][order_id]
 
         try:
-            # Получить статус ордера от Bybit
-            order_info = await self.client.get_order_history(
+            # Получить статус ордера от Bybit (сначала open orders, потом history)
+            order_info = await self.client.get_order(
                 symbol=order.symbol,
                 order_id=order_id
             )
-
-            if not order_info:
-                logger.warning(f"Order {order_id} not found in history")
-                return
 
             status = order_info.get('orderStatus', '')
 
@@ -146,6 +142,7 @@ class OrderMonitor:
                 # Ордер отменен или отклонен
                 logger.info(f"Order {order_id} status: {status}, removing from monitor")
                 self.unregister_order(user_id, order_id)
+            # Если статус New/PartiallyFilled - продолжаем мониторинг
 
         except Exception as e:
             logger.error(f"Error checking order {order_id}: {e}")
