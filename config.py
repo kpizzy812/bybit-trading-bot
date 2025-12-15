@@ -89,7 +89,8 @@ SYNTRA_API_URL = os.getenv('SYNTRA_API_URL', 'http://localhost:8000')
 SYNTRA_API_KEY = os.getenv('SYNTRA_API_KEY')
 
 # Таймаут для запросов к Syntra AI (секунды)
-SYNTRA_API_TIMEOUT = int(os.getenv('SYNTRA_API_TIMEOUT', 30))
+# AI генерация сценариев может занимать до 2 минут
+SYNTRA_API_TIMEOUT = int(os.getenv('SYNTRA_API_TIMEOUT', 180))
 
 # Включить AI сценарии в боте
 AI_SCENARIOS_ENABLED = os.getenv('AI_SCENARIOS_ENABLED', 'true').lower() == 'true'
