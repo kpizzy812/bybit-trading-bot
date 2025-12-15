@@ -141,6 +141,9 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
 
         logger.info(f"Trade execution started: {symbol} {side} {entry_type}, risk=${risk_usd}, lev={leverage}x")
 
+        # Конвертируем side для RiskCalculator (Buy->Long, Sell->Short)
+        position_side = "Long" if side == "Buy" else "Short"
+
         # ===== 2. Получить user settings =====
         settings = await settings_storage.get_settings(user_id)
         testnet_mode = settings.testnet_mode
@@ -168,7 +171,7 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
             # Режим Position Size - рассчитываем от размера позиции
             position_calc = await risk_calc.calculate_position_from_size(
                 symbol=symbol,
-                side=side,
+                side=position_side,  # Long/Short для RiskCalculator
                 entry_price=entry_price,
                 stop_price=stop_price,
                 position_size_usd=position_size_usd,
@@ -178,7 +181,7 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
             # Режим Risk - стандартный расчёт
             position_calc = await risk_calc.calculate_position(
                 symbol=symbol,
-                side=side,
+                side=position_side,  # Long/Short для RiskCalculator
                 entry_price=entry_price,
                 stop_price=stop_price,
                 risk_usd=risk_usd,
@@ -457,7 +460,7 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
                 user_id=user_id,
                 timestamp=datetime.utcnow().isoformat(),
                 symbol=symbol,
-                side=side,
+                side=position_side,  # Long/Short для логов
                 entry_price=actual_entry_price,
                 exit_price=None,  # Будет заполнено при закрытии
                 qty=actual_qty,
