@@ -74,19 +74,29 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger):
             # Парсим данные
             symbol = trade.symbol
             side = trade.side
-            outcome = trade.outcome or "unknown"
+            outcome = trade.outcome or "open"
             pnl = trade.pnl_usd or 0
             roe = trade.roe_percent or 0
             timestamp = datetime.fromisoformat(trade.timestamp).strftime("%d.%m %H:%M")
 
             # Эмодзи
-            side_emoji = "🟢" if side == "Buy" else "🔴"
-            outcome_emoji = "✅" if outcome == "win" else ("❌" if outcome == "loss" else "➖")
+            side_emoji = "🟢" if side in ("Buy", "Long") else "🔴"
+            if outcome == "win":
+                outcome_emoji = "✅"
+            elif outcome == "loss":
+                outcome_emoji = "❌"
+            elif outcome == "open":
+                outcome_emoji = "⏳"
+            else:
+                outcome_emoji = "➖"
+
+            # Exit price может быть None для открытых позиций
+            exit_str = f"${trade.exit_price:.4f}" if trade.exit_price else "открыта"
 
             text += (
                 f"{outcome_emoji} {side_emoji} <b>{symbol}</b> | {timestamp}\n"
                 f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
-                f"  Entry: ${trade.entry_price:.4f} → Exit: ${trade.exit_price:.4f}\n\n"
+                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}\n\n"
             )
 
         # Проверяем, есть ли ещё сделки
@@ -132,18 +142,27 @@ async def show_trades_page(callback: CallbackQuery, trade_logger):
         for trade in trades:
             symbol = trade.symbol
             side = trade.side
-            outcome = trade.outcome or "unknown"
+            outcome = trade.outcome or "open"
             pnl = trade.pnl_usd or 0
             roe = trade.roe_percent or 0
             timestamp = datetime.fromisoformat(trade.timestamp).strftime("%d.%m %H:%M")
 
-            side_emoji = "🟢" if side == "Buy" else "🔴"
-            outcome_emoji = "✅" if outcome == "win" else ("❌" if outcome == "loss" else "➖")
+            side_emoji = "🟢" if side in ("Buy", "Long") else "🔴"
+            if outcome == "win":
+                outcome_emoji = "✅"
+            elif outcome == "loss":
+                outcome_emoji = "❌"
+            elif outcome == "open":
+                outcome_emoji = "⏳"
+            else:
+                outcome_emoji = "➖"
+
+            exit_str = f"${trade.exit_price:.4f}" if trade.exit_price else "открыта"
 
             text += (
                 f"{outcome_emoji} {side_emoji} <b>{symbol}</b> | {timestamp}\n"
                 f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
-                f"  Entry: ${trade.entry_price:.4f} → Exit: ${trade.exit_price:.4f}\n\n"
+                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}\n\n"
             )
 
         has_next = len(trades) == 20
