@@ -16,6 +16,7 @@ from services.trade_logger import create_trade_logger
 from services.position_monitor import create_position_monitor
 from services.order_monitor import create_order_monitor
 from services.breakeven_manager import create_breakeven_manager
+from services.post_sl_analyzer import create_post_sl_analyzer
 
 
 class InterceptHandler(logging.Handler):
@@ -99,6 +100,15 @@ async def main():
     if config.AUTO_BREAKEVEN_ENABLED:
         logger.info("🛡️ Auto Breakeven enabled")
 
+    # Инициализация post-SL analyzer
+    logger.info("Initializing post-SL analyzer...")
+    post_sl_analyzer = create_post_sl_analyzer(
+        bot=bot,
+        testnet=config.DEFAULT_TESTNET_MODE
+    )
+    await post_sl_analyzer.connect()
+    logger.info("📊 Post-SL Analysis enabled")
+
     # Инициализация position monitor
     logger.info("Initializing position monitor...")
     position_monitor = create_position_monitor(
@@ -106,7 +116,8 @@ async def main():
         trade_logger=trade_logger,
         testnet=config.DEFAULT_TESTNET_MODE,
         check_interval=config.POSITION_MONITOR_INTERVAL,
-        breakeven_manager=breakeven_manager
+        breakeven_manager=breakeven_manager,
+        post_sl_analyzer=post_sl_analyzer
     )
 
     # Автоматически регистрируем owner для мониторинга
@@ -136,7 +147,8 @@ async def main():
         'trade_logger': trade_logger,
         'position_monitor': position_monitor,
         'order_monitor': order_monitor,
-        'breakeven_manager': breakeven_manager
+        'breakeven_manager': breakeven_manager,
+        'post_sl_analyzer': post_sl_analyzer
     })
 
     # Регистрация middleware
@@ -171,6 +183,7 @@ async def main():
         logger.info("Shutting down...")
         await position_monitor.stop()
         await order_monitor.stop()
+        await post_sl_analyzer.close()
         await settings_storage.close()
         await lock_manager.close()
         await trade_logger.close()

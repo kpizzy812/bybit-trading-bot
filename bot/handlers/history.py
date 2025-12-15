@@ -192,7 +192,7 @@ async def show_trades_page(callback: CallbackQuery, trade_logger, settings_stora
 # ============================================================
 
 @router.callback_query(F.data == "hist_stats")
-async def show_statistics(callback: CallbackQuery, trade_logger, settings_storage):
+async def show_statistics(callback: CallbackQuery, trade_logger, settings_storage, post_sl_analyzer=None):
     """Показать статистику по сделкам"""
     await callback.answer("📊 Загружаю статистику...")
 
@@ -203,6 +203,14 @@ async def show_statistics(callback: CallbackQuery, trade_logger, settings_storag
     try:
         # Получаем статистику по последним 100 сделкам для текущего режима
         stats = await trade_logger.get_statistics(user_id, limit=100, testnet=testnet_mode)
+
+        # Получаем статистику по SL (если доступна)
+        sl_stats = None
+        if post_sl_analyzer:
+            try:
+                sl_stats = await post_sl_analyzer.get_sl_statistics(user_id, limit=50)
+            except Exception as sl_err:
+                logger.warning(f"Could not get SL statistics: {sl_err}")
 
         if stats['total_trades'] == 0:
             await callback.message.edit_text(
@@ -273,6 +281,25 @@ Win streak: {max_win_streak} | Loss streak: {max_loss_streak}
                 winrate_symbol = (wins / count * 100) if count > 0 else 0
 
                 text += f"• {symbol}: {count} сделок, ${pnl:+.2f} ({winrate_symbol:.0f}% WR)\n"
+
+        # Post-SL Analysis статистика
+        if sl_stats and sl_stats.get('analyzed', 0) > 0:
+            correct_rate = sl_stats.get('correct_sl_rate', 0)
+            correct_count = sl_stats.get('correct_sl_count', 0)
+            incorrect_count = sl_stats.get('incorrect_sl_count', 0)
+            analyzed = sl_stats.get('analyzed', 0)
+            avg_adverse = sl_stats.get('avg_adverse_move', 0)
+            avg_favorable = sl_stats.get('avg_favorable_move', 0)
+
+            sl_emoji = "✅" if correct_rate >= 60 else "⚠️" if correct_rate >= 40 else "❌"
+
+            text += f"""
+
+<b>🛡️ Post-SL Analysis:</b>
+{sl_emoji} Правильных SL: {correct_rate:.0f}% ({correct_count}/{analyzed})
+📊 После неверных SL: +{avg_favorable:.1f}% avg
+📉 После верных SL: -{avg_adverse:.1f}% avg
+"""
 
         await callback.message.edit_text(
             text.strip(),

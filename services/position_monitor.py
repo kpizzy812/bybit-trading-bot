@@ -20,6 +20,7 @@ from services.trade_logger import TradeLogger
 
 if TYPE_CHECKING:
     from services.breakeven_manager import BreakevenManager
+    from services.post_sl_analyzer import PostSLAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -60,13 +61,15 @@ class PositionMonitor:
         trade_logger: TradeLogger,
         check_interval: int = 15,  # Интервал проверки в секундах
         testnet: bool = False,
-        breakeven_manager: Optional['BreakevenManager'] = None
+        breakeven_manager: Optional['BreakevenManager'] = None,
+        post_sl_analyzer: Optional['PostSLAnalyzer'] = None
     ):
         self.bot = bot
         self.trade_logger = trade_logger
         self.check_interval = check_interval
         self.testnet = testnet
         self.breakeven_manager = breakeven_manager
+        self.post_sl_analyzer = post_sl_analyzer
 
         # Создаем клиент один раз
         self.client = BybitClient(testnet=testnet)
@@ -85,6 +88,11 @@ class PositionMonitor:
         """Установить BreakevenManager после инициализации"""
         self.breakeven_manager = breakeven_manager
         logger.info("BreakevenManager connected to PositionMonitor")
+
+    def set_post_sl_analyzer(self, post_sl_analyzer: 'PostSLAnalyzer'):
+        """Установить PostSLAnalyzer после инициализации"""
+        self.post_sl_analyzer = post_sl_analyzer
+        logger.info("PostSLAnalyzer connected to PositionMonitor")
 
     def register_user(self, user_id: int):
         """Зарегистрировать пользователя для мониторинга"""
@@ -214,6 +222,25 @@ class PositionMonitor:
         # Очищаем статус breakeven для этой позиции
         if self.breakeven_manager:
             self.breakeven_manager.clear_breakeven_status(snapshot.symbol, snapshot.side)
+
+        # === POST-SL ANALYSIS ===
+        # Если закрытие по Stop Loss, регистрируем для анализа
+        if reason == "Stop Loss" and self.post_sl_analyzer:
+            try:
+                # Получаем trade_id из trade_logger
+                trades = await self.trade_logger.get_trades(user_id, limit=1, testnet=self.testnet)
+                trade_id = trades[0].trade_id if trades else f"sl_{snapshot.symbol}_{datetime.utcnow().timestamp()}"
+
+                await self.post_sl_analyzer.register_sl_hit(
+                    trade_id=trade_id,
+                    user_id=user_id,
+                    symbol=snapshot.symbol,
+                    side=snapshot.side,
+                    entry_price=snapshot.entry_price,
+                    sl_price=exit_price
+                )
+            except Exception as psl_error:
+                logger.error(f"Post-SL analysis registration error: {psl_error}")
 
         # Отправляем уведомление
         await self._send_close_notification(
@@ -410,7 +437,8 @@ def create_position_monitor(
     trade_logger: TradeLogger,
     testnet: bool = False,
     check_interval: int = 15,
-    breakeven_manager: Optional['BreakevenManager'] = None
+    breakeven_manager: Optional['BreakevenManager'] = None,
+    post_sl_analyzer: Optional['PostSLAnalyzer'] = None
 ) -> PositionMonitor:
     """Создать экземпляр PositionMonitor"""
     return PositionMonitor(
@@ -418,5 +446,6 @@ def create_position_monitor(
         trade_logger=trade_logger,
         check_interval=check_interval,
         testnet=testnet,
-        breakeven_manager=breakeven_manager
+        breakeven_manager=breakeven_manager,
+        post_sl_analyzer=post_sl_analyzer
     )
