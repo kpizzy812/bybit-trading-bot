@@ -45,10 +45,12 @@ class OrderMonitor:
     def __init__(
         self,
         bot: Bot,
+        trade_logger,
         check_interval: int = 10,  # Интервал проверки в секундах
         testnet: bool = False
     ):
         self.bot = bot
+        self.trade_logger = trade_logger
         self.check_interval = check_interval
         self.testnet = testnet
 
@@ -156,7 +158,30 @@ class OrderMonitor:
 
             logger.info(f"Order {order.order_id} filled: {order.symbol} {order.side} @ ${actual_entry_price:.2f}, qty: {actual_qty}")
 
-            # 1. Установить Stop Loss
+            # 1. Зарегистрировать вход в позицию в trade_logger
+            try:
+                # Рассчитать риск
+                actual_risk = abs(actual_entry_price - order.stop_price) * actual_qty
+
+                # Рассчитать маржу
+                margin = (actual_entry_price * actual_qty) / order.leverage
+
+                await self.trade_logger.log_entry(
+                    user_id=user_id,
+                    symbol=order.symbol,
+                    side=order.side,
+                    entry_price=actual_entry_price,
+                    qty=actual_qty,
+                    leverage=order.leverage,
+                    stop_loss=order.stop_price,
+                    risk_usd=actual_risk,
+                    margin_usd=margin
+                )
+                logger.info(f"Trade entry logged for {order.symbol} @ ${actual_entry_price:.2f}")
+            except Exception as log_error:
+                logger.error(f"Failed to log trade entry: {log_error}")
+
+            # 2. Установить Stop Loss
             await self.client.set_trading_stop(
                 symbol=order.symbol,
                 stop_loss=str(order.stop_price),
@@ -164,11 +189,11 @@ class OrderMonitor:
             )
             logger.info(f"SL set at ${order.stop_price:.2f} for {order.symbol}")
 
-            # 2. Установить ladder Take Profit
+            # 3. Установить ladder Take Profit
             if order.targets:
                 await self._set_ladder_tp(order, actual_qty)
 
-            # 3. Отправить уведомление
+            # 4. Отправить уведомление
             await self._send_fill_notification(user_id, order, actual_entry_price, actual_qty)
 
         except Exception as e:
@@ -256,12 +281,14 @@ class OrderMonitor:
 
 def create_order_monitor(
     bot: Bot,
+    trade_logger,
     testnet: bool = False,
     check_interval: int = 10
 ) -> OrderMonitor:
     """Создать экземпляр OrderMonitor"""
     return OrderMonitor(
         bot=bot,
+        trade_logger=trade_logger,
         check_interval=check_interval,
         testnet=testnet
     )

@@ -109,6 +109,7 @@ async def main():
     logger.info("Initializing order monitor...")
     order_monitor = create_order_monitor(
         bot=bot,
+        trade_logger=trade_logger,
         testnet=config.DEFAULT_TESTNET_MODE,
         check_interval=10  # Проверяем ордера каждые 10 секунд
     )
