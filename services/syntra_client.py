@@ -17,6 +17,20 @@ class SyntraAPIError(Exception):
     pass
 
 
+def _clean_error_response(status_code: int, error_text: str) -> str:
+    """Очистить HTML из ответа сервера для читаемости"""
+    if "<html" in error_text.lower():
+        if status_code == 504:
+            return "Gateway Timeout (nginx таймаут на сервере, нужно увеличить proxy_read_timeout)"
+        elif status_code == 502:
+            return "Bad Gateway (сервер недоступен)"
+        elif status_code == 503:
+            return "Service Unavailable"
+        else:
+            return f"HTTP {status_code}"
+    return error_text[:200]  # Ограничить длину
+
+
 class SyntraClient:
     """
     Клиент для работы с Syntra AI API
@@ -102,9 +116,8 @@ class SyntraClient:
 
                     if response.status != 200:
                         error_text = await response.text()
-                        raise SyntraAPIError(
-                            f"API error {response.status}: {error_text}"
-                        )
+                        clean_error = _clean_error_response(response.status, error_text)
+                        raise SyntraAPIError(f"API error {response.status}: {clean_error}")
 
                     data = await response.json()
 
@@ -117,6 +130,9 @@ class SyntraClient:
                     logger.info(f"Received {len(scenarios)} scenarios for {symbol}")
 
                     return scenarios
+
+        except SyntraAPIError:
+            raise  # Не оборачивать повторно
 
         except asyncio.TimeoutError:
             logger.error(f"Timeout after {self.timeout}s waiting for Syntra AI response")
@@ -214,9 +230,8 @@ class SyntraClient:
 
                     if response.status != 200:
                         error_text = await response.text()
-                        raise SyntraAPIError(
-                            f"API error {response.status}: {error_text}"
-                        )
+                        clean_error = _clean_error_response(response.status, error_text)
+                        raise SyntraAPIError(f"API error {response.status}: {clean_error}")
 
                     data = await response.json()
 
@@ -226,6 +241,9 @@ class SyntraClient:
                         )
 
                     return data
+
+        except SyntraAPIError:
+            raise  # Не оборачивать повторно
 
         except asyncio.TimeoutError:
             logger.error(f"Timeout after {self.timeout}s waiting for Syntra AI response")
