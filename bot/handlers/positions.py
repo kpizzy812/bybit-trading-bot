@@ -165,18 +165,18 @@ async def partial_close_position(callback: CallbackQuery, settings_storage, trad
             f"Закрыто: {result['closed_qty']} ({percent}%)\n"
             f"Было: {result['total_size']}\n"
             f"PnL: ${partial_pnl:+.2f}\n\n"
-            f"💡 Используй <b>📊 Позиции</b> чтобы проверить текущее состояние",
-            reply_markup=get_main_menu()
+            f"💡 Используй <b>📊 Позиции</b> чтобы проверить текущее состояние"
         )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
     except BybitError as e:
         logger.error(f"Error partial closing position: {e}")
         await callback.message.edit_text(
             f"❌ <b>Ошибка при закрытии позиции</b>\n\n"
             f"{str(e)}\n\n"
-            f"Попробуй снова или обратись к главному меню",
-            reply_markup=get_main_menu()
+            f"Попробуй снова или обратись к главному меню"
         )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
 
 # ============================================================
@@ -268,16 +268,16 @@ async def close_position_confirmed(callback: CallbackQuery, settings_storage, tr
             )
 
         await callback.message.edit_text(
-            msg + "\n\n💡 Используй <b>📊 Позиции</b> чтобы проверить статус",
-            reply_markup=get_main_menu()
+            msg + "\n\n💡 Используй <b>📊 Позиции</b> чтобы проверить статус"
         )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
     except BybitError as e:
         logger.error(f"Error closing position: {e}")
         await callback.message.edit_text(
-            f"❌ <b>Ошибка при закрытии</b>\n\n{str(e)}",
-            reply_markup=get_main_menu()
+            f"❌ <b>Ошибка при закрытии</b>\n\n{str(e)}"
         )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
 
 # ============================================================
@@ -348,7 +348,8 @@ async def move_sl_execute(message: Message, state: FSMContext, settings_storage)
             f"Symbol: {symbol}\n"
             f"Entry: ${result['entry_price']:.4f}\n"
             f"Новый SL: ${result['new_sl']}\n\n"
-            f"💡 Позиция теперь защищена новым стопом",
+            f"💡 Позиция теперь защищена новым стопом\n\n"
+            f"Используй главное меню 👇",
             reply_markup=get_main_menu()
         )
 
@@ -396,9 +397,9 @@ async def panic_close_all_execute(callback: CallbackQuery, settings_storage, tra
 
         if not positions:
             await callback.message.edit_text(
-                "📊 Нет открытых позиций для закрытия",
-                reply_markup=get_main_menu()
+                "📊 Нет открытых позиций для закрытия"
             )
+            await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
             return
 
         # Закрываем все позиции
@@ -444,17 +445,15 @@ async def panic_close_all_execute(callback: CallbackQuery, settings_storage, tra
 
         result_text += "💡 Проверь статус в <b>📊 Позиции</b>"
 
-        await callback.message.edit_text(
-            result_text,
-            reply_markup=get_main_menu()
-        )
+        await callback.message.edit_text(result_text)
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
     except Exception as e:
         logger.error(f"Error during panic close all: {e}")
         await callback.message.edit_text(
-            f"❌ Ошибка при Panic Close:\n{str(e)}",
-            reply_markup=get_main_menu()
+            f"❌ Ошибка при Panic Close:\n{str(e)}"
         )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
 
 # ============================================================
@@ -513,7 +512,14 @@ async def _format_positions_list(positions: list) -> str:
         mark_price = float(pos.get('markPrice', 0))
         unrealized_pnl = float(pos.get('unrealisedPnl', 0))
         leverage = pos.get('leverage', '?')
-        liq_price = pos.get('liqPrice', 'N/A')
+
+        # Форматирование liqPrice
+        liq_price_raw = pos.get('liqPrice', '')
+        try:
+            liq_price_float = float(liq_price_raw) if liq_price_raw else 0
+            liq_price = f"${liq_price_float:.2f}" if liq_price_float > 0 else "∞"
+        except (ValueError, TypeError):
+            liq_price = "N/A"
 
         # ROE%
         roe = 0
@@ -529,7 +535,7 @@ async def _format_positions_list(positions: list) -> str:
             f"  Size: {size} | Leverage: {leverage}x\n"
             f"  Entry: ${entry_price:.4f} | Mark: ${mark_price:.4f}\n"
             f"  {pnl_emoji} PnL: ${unrealized_pnl:.2f} ({roe:+.2f}%)\n"
-            f"  Liq: ${liq_price}\n\n"
+            f"  Liq: {liq_price}\n\n"
         )
 
     return text
@@ -542,10 +548,17 @@ async def _format_position_detail(position: dict) -> str:
     size = float(position.get('size', 0))
     entry_price = float(position.get('avgPrice', 0))
     mark_price = float(position.get('markPrice', 0))
-    liq_price = position.get('liqPrice', 'N/A')
     leverage = position.get('leverage', '?')
     unrealized_pnl = float(position.get('unrealisedPnl', 0))
     realized_pnl = float(position.get('cumRealisedPnl', 0))
+
+    # Форматирование liqPrice
+    liq_price_raw = position.get('liqPrice', '')
+    try:
+        liq_price_float = float(liq_price_raw) if liq_price_raw else 0
+        liq_price = f"${liq_price_float:.2f}" if liq_price_float > 0 else "∞"
+    except (ValueError, TypeError):
+        liq_price = "N/A"
 
     # SL/TP
     stop_loss = position.get('stopLoss', 'None')
@@ -565,7 +578,7 @@ async def _format_position_detail(position: dict) -> str:
 <b>Позиция:</b>
 Entry: ${entry_price:.4f}
 Mark Price: ${mark_price:.4f}
-Liq Price: ${liq_price}
+Liq Price: {liq_price}
 
 Size: {size}
 Leverage: {leverage}x
