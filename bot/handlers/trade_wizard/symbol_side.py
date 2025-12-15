@@ -33,7 +33,7 @@ async def symbol_selected(callback: CallbackQuery, state: FSMContext, settings_s
 
     # Получаем настройки для проверки shorts_enabled
     user_settings = await settings_storage.get_settings(callback.from_user.id)
-    shorts_enabled = user_settings.get('shorts_enabled', config.DEFAULT_SHORTS_ENABLED)
+    shorts_enabled = user_settings.shorts_enabled
 
     await callback.message.edit_text(
         f"📊 <b>Символ:</b> {symbol}\n\n"

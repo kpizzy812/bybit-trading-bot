@@ -73,7 +73,7 @@ async def risk_selected(callback: CallbackQuery, state: FSMContext, settings_sto
         risk_usd = float(risk_str)
 
         user_settings = await settings_storage.get_settings(callback.from_user.id)
-        max_risk = user_settings.get('max_risk_per_trade', config.MAX_RISK_PER_TRADE)
+        max_risk = user_settings.max_risk_per_trade
 
         if risk_usd > max_risk:
             await callback.answer(
@@ -101,7 +101,7 @@ async def custom_risk_entered(message: Message, state: FSMContext, settings_stor
             return
 
         user_settings = await settings_storage.get_settings(message.from_user.id)
-        max_risk = user_settings.get('max_risk_per_trade', config.MAX_RISK_PER_TRADE)
+        max_risk = user_settings.max_risk_per_trade
 
         if risk_usd > max_risk:
             await message.answer(f"❌ Риск ${risk_usd} превышает макс. ${max_risk}")

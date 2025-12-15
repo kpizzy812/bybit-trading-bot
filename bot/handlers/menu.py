@@ -32,7 +32,7 @@ async def positions_handler(message: Message, settings_storage, lock_manager):
     """Показать открытые позиции"""
     # Получаем настройки пользователя
     user_settings = await settings_storage.get_settings(message.from_user.id)
-    testnet = user_settings.get('testnet_mode', config.DEFAULT_TESTNET_MODE)
+    testnet = user_settings.testnet_mode
 
     try:
         from services.bybit import BybitClient
@@ -96,12 +96,12 @@ async def settings_handler(message: Message, settings_storage):
     user_settings = await settings_storage.get_settings(message.from_user.id)
 
     # Формируем текст с текущими настройками
-    testnet_mode = user_settings.get('testnet_mode', config.DEFAULT_TESTNET_MODE)
-    default_risk = user_settings.get('default_risk_usd', config.DEFAULT_RISK_USD)
-    default_leverage = user_settings.get('default_leverage', config.DEFAULT_LEVERAGE)
-    default_margin_mode = user_settings.get('default_margin_mode', config.DEFAULT_MARGIN_MODE)
-    shorts_enabled = user_settings.get('shorts_enabled', config.DEFAULT_SHORTS_ENABLED)
-    default_tp_mode = user_settings.get('default_tp_mode', config.DEFAULT_TP_MODE)
+    testnet_mode = user_settings.testnet_mode
+    default_risk = user_settings.default_risk_usd
+    default_leverage = user_settings.default_leverage
+    default_margin_mode = user_settings.default_margin_mode
+    shorts_enabled = user_settings.shorts_enabled
+    default_tp_mode = user_settings.default_tp_mode
 
     mode_text = "🧪 <b>Testnet</b>" if testnet_mode else "🔴 <b>Live Trading</b>"
     shorts_text = "✅ Включены" if shorts_enabled else "❌ Выключены"
@@ -150,7 +150,7 @@ async def toggle_mode_handler(message: Message, settings_storage):
     user_settings = await settings_storage.get_settings(user_id)
 
     # Текущий режим
-    current_testnet = user_settings.get('testnet_mode', config.DEFAULT_TESTNET_MODE)
+    current_testnet = user_settings.testnet_mode
 
     # Переключаем
     new_testnet = not current_testnet

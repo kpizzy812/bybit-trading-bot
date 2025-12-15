@@ -40,7 +40,7 @@ async def entry_type_selected(callback: CallbackQuery, state: FSMContext, settin
         # Market вход - получаем текущую цену и переходим к выбору режима стопа
         try:
             user_settings = await settings_storage.get_settings(callback.from_user.id)
-            testnet = user_settings.get('testnet_mode', config.DEFAULT_TESTNET_MODE)
+            testnet = user_settings.testnet_mode
 
             client = BybitClient(testnet=testnet)
             current_price = await get_current_price(client, symbol)

@@ -125,9 +125,9 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
 
         # ===== 2. Получить user settings =====
         settings = await settings_storage.get_settings(user_id)
-        testnet_mode = settings.get('testnet_mode', config.DEFAULT_TESTNET_MODE)
-        max_risk = settings.get('max_risk_per_trade', config.MAX_RISK_PER_TRADE)
-        max_margin = settings.get('max_margin_per_trade', config.MAX_MARGIN_PER_TRADE)
+        testnet_mode = settings.testnet_mode
+        max_risk = settings.max_risk_per_trade
+        max_margin = settings.max_margin_per_trade
 
         # ===== 3. Создать Bybit клиент =====
         bybit = BybitClient(testnet=testnet_mode)
