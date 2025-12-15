@@ -328,7 +328,7 @@ async def show_trade_confirmation(message: Message, scenario: dict, symbol: str,
 
     # Получить параметры сценария
     bias = scenario.get("bias", "long")
-    side = "Buy" if bias == "long" else "Sell"
+    side = "Long" if bias == "long" else "Short"
     side_emoji = "🟢" if bias == "long" else "🔴"
 
     entry = scenario.get("entry", {})
@@ -407,7 +407,8 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         # Извлечь параметры сценария
         symbol = data.get("symbol", "BTCUSDT")
         bias = scenario.get("bias", "long")
-        side = "Buy" if bias == "long" else "Sell"
+        side = "Long" if bias == "long" else "Short"  # Для RiskCalculator
+        order_side = "Buy" if bias == "long" else "Sell"  # Для Bybit API
 
         entry = scenario.get("entry", {})
         entry_min = entry.get("price_min", 0)
@@ -424,48 +425,45 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         bybit = BybitClient(testnet=testnet_mode)
         risk_calc = RiskCalculator(bybit)
 
-        # Получить текущую mark price
+        # Получить текущую цену
         ticker = await bybit.get_tickers(symbol)
-        mark_price = float(ticker.get('markPrice'))
+        mark_price = float(ticker.get('markPrice', 0))
+        index_price = float(ticker.get('indexPrice', 0))
 
-        # ===== ВАЛИДАЦИЯ ЗОНЫ ВХОДА =====
-        # Проверяем что текущая цена в зоне или близко к ней
-        zone_size = entry_max - entry_min
-        zone_tolerance = zone_size * 0.15  # 15% от размера зоны
-
-        # Проверка для Long
-        if bias == "long":
-            # Цена должна быть В зоне или чуть выше (не более +15% от размера зоны)
-            if mark_price > entry_max + zone_tolerance:
-                await callback.message.edit_text(
-                    f"⚠️ <b>Цена слишком высока для входа!</b>\n\n"
-                    f"💰 Текущая цена: <b>${mark_price:.2f}</b>\n"
-                    f"📊 Зона входа: ${entry_min:.2f} - ${entry_max:.2f}\n\n"
-                    f"<i>Цена выше рекомендованной зоны.\n"
-                    f"Подожди коррекции или выбери другой сценарий.</i>",
-                    reply_markup=None
-                )
-                await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
-                return
-
-        # Проверка для Short
+        # Умная проверка: если markPrice отличается от indexPrice > 5%, используем indexPrice
+        # (на testnet markPrice может быть битым)
+        price_diff_pct = abs(mark_price - index_price) / index_price * 100 if index_price > 0 else 0
+        if price_diff_pct > 5:
+            current_price = index_price
+            logger.warning(f"markPrice ({mark_price}) differs from indexPrice ({index_price}) by {price_diff_pct:.1f}%, using indexPrice")
         else:
-            # Цена должна быть В зоне или чуть ниже (не более -15% от размера зоны)
-            if mark_price < entry_min - zone_tolerance:
-                await callback.message.edit_text(
-                    f"⚠️ <b>Цена слишком низка для входа!</b>\n\n"
-                    f"💰 Текущая цена: <b>${mark_price:.2f}</b>\n"
-                    f"📊 Зона входа: ${entry_min:.2f} - ${entry_max:.2f}\n\n"
-                    f"<i>Цена ниже рекомендованной зоны.\n"
-                    f"Подожди отскока или выбери другой сценарий.</i>",
-                    reply_markup=None
-                )
-                await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
-                return
+            current_price = mark_price
 
-        # Цена ОК - используем текущую mark_price для входа
-        entry_price = mark_price
-        logger.info(f"Entry zone validation passed: ${mark_price:.2f} in zone ${entry_min:.2f}-${entry_max:.2f}")
+        logger.info(f"Current price: ${current_price:.2f} (mark: {mark_price}, index: {index_price})")
+
+        # ===== ОПРЕДЕЛЕНИЕ ТИПА ОРДЕРА И ENTRY PRICE =====
+        # Логика:
+        # - Цена в зоне → Market order по текущей цене
+        # - Цена вне зоны → Limit order на границе зоны
+
+        in_zone = entry_min <= current_price <= entry_max
+
+        if in_zone:
+            # Цена в зоне - используем Market order
+            order_type = "Market"
+            entry_price = current_price
+            logger.info(f"Price ${current_price:.2f} in entry zone ${entry_min:.2f}-${entry_max:.2f} → Market order")
+        else:
+            # Цена вне зоны - используем Limit order на границе
+            order_type = "Limit"
+            if bias == "long":
+                # Long: ждём снижения цены до верхней границы зоны
+                entry_price = entry_max
+                logger.info(f"Price ${current_price:.2f} above zone ${entry_min:.2f}-${entry_max:.2f} → Limit order at ${entry_price:.2f}")
+            else:
+                # Short: ждём роста цены до нижней границы зоны
+                entry_price = entry_min
+                logger.info(f"Price ${current_price:.2f} below zone ${entry_min:.2f}-${entry_max:.2f} → Limit order at ${entry_price:.2f}")
 
         # Рассчитать позицию
         position_calc = await risk_calc.calculate_position(
@@ -479,6 +477,11 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 
         qty = position_calc['qty']
         margin_required = position_calc['margin_required']
+        actual_risk_usd = position_calc['actual_risk_usd']
+
+        # Определяем emoji и targets для сообщений
+        side_emoji = "🟢" if bias == "long" else "🔴"
+        targets = scenario.get("targets", [])
 
         # Валидация баланса
         is_valid, error_msg = await risk_calc.validate_balance(
@@ -499,28 +502,85 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         # Установить leverage
         await bybit.set_leverage(symbol, leverage)
 
-        # Разместить Market ордер
+        # Разместить ордер (Market или Limit)
         import uuid
         trade_id = str(uuid.uuid4())
-        entry_order = await bybit.place_order(
-            symbol=symbol,
-            side=side,
-            order_type="Market",
-            qty=qty,
-            client_order_id=f"{trade_id}_entry"[:36]
-        )
 
-        order_id = entry_order['orderId']
+        if order_type == "Market":
+            # Market order - размещаем и ждём fill
+            entry_order = await bybit.place_order(
+                symbol=symbol,
+                side=order_side,
+                order_type="Market",
+                qty=qty,
+                client_order_id=f"{trade_id}_entry"[:36]
+            )
 
-        # Ждём fill
-        filled_order = await bybit.wait_until_filled(
-            symbol=symbol,
-            order_id=order_id,
-            timeout=config.MARKET_ORDER_TIMEOUT
-        )
+            order_id = entry_order['orderId']
 
+            # Ждём fill
+            filled_order = await bybit.wait_until_filled(
+                symbol=symbol,
+                order_id=order_id,
+                timeout=config.MARKET_ORDER_TIMEOUT
+            )
+
+            actual_entry_price = float(filled_order['avgPrice'])
+            actual_qty = float(filled_order['qty'])
+        else:
+            # Limit order - размещаем БЕЗ ожидания fill
+            entry_price_str = round_price(entry_price, position_calc.get('instrument_info', {}).get('tickSize', '0.01'))
+
+            entry_order = await bybit.place_order(
+                symbol=symbol,
+                side=order_side,
+                order_type="Limit",
+                qty=qty,
+                price=entry_price_str,
+                client_order_id=f"{trade_id}_entry"[:36]
+            )
+
+            order_id = entry_order['orderId']
+
+            # Для limit order не ждём fill - показываем success и выходим
+            success_text = f"""
+✅ <b>Лимитный ордер размещён!</b>
+
+{side_emoji} <b>{symbol}</b> {bias.upper()}
+
+📊 <b>Limit Entry:</b> ${entry_price:.2f}
+💰 <b>Current Price:</b> ${current_price:.2f}
+🛑 <b>Stop:</b> ${stop_price:.2f}
+"""
+            # Добавляем информацию о всех TP
+            if targets:
+                for idx, target in enumerate(targets, 1):
+                    tp_price = target.get("price", 0)
+                    partial_pct = target.get("partial_close_pct", 0)
+                    success_text += f"🎯 <b>TP{idx}:</b> ${tp_price:.2f} ({partial_pct}%)\n"
+
+            success_text += f"""
+💰 <b>Risk:</b> ${actual_risk_usd:.2f}
+📊 <b>Leverage:</b> {leverage}x
+📦 <b>Qty:</b> {qty}
+
+<i>⏳ Ордер будет исполнен когда цена достигнет ${entry_price:.2f}
+📊 Order ID: {order_id}
+🔔 Получишь уведомление когда ордер сработает</i>
+"""
+            await callback.message.edit_text(success_text, reply_markup=None)
+            await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+
+            logger.info(f"AI Limit order placed: {symbol} {side} @ ${entry_price:.2f}, order_id: {order_id}")
+            return
+
+            # TODO: Сохранить информацию о pending order для order_monitor
+            # TODO: Order monitor будет отслеживать fill и автоматически ставить SL/TP
+
+        # Код ниже выполняется только для Market orders
         actual_entry_price = float(filled_order['avgPrice'])
         actual_qty = float(filled_order['qty'])
+        actual_risk = abs(actual_entry_price - stop_price) * actual_qty
 
         # Установить Stop Loss
         await bybit.set_trading_stop(
@@ -530,7 +590,6 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         )
 
         # ===== УСТАНОВИТЬ LADDER TAKE PROFIT =====
-        targets = scenario.get("targets", [])
         if targets:
             # Получить instrument info для округления
             instrument_info = position_calc.get('instrument_info', {})
@@ -566,7 +625,7 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
             # Разместить ladder TP ордера
             await bybit.place_ladder_tp(
                 symbol=symbol,
-                position_side=side,
+                position_side=order_side,
                 tp_levels=tp_levels,
                 client_order_id_prefix=trade_id
             )
@@ -574,9 +633,6 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 
         # Success!
         actual_risk = abs(actual_entry_price - stop_price) * actual_qty
-
-        # Определяем emoji для side
-        side_emoji = "🟢" if bias == "long" else "🔴"
 
         # Формируем success message
         success_text = f"""

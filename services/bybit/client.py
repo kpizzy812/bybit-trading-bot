@@ -35,7 +35,7 @@ class BaseBybitClient:
             api_secret=api_secret
         )
 
-        logger.info(f"Bybit client initialized ({'testnet' if testnet else 'live'} mode)")
+        logger.debug(f"Bybit client initialized ({'testnet' if testnet else 'live'} mode)")
 
     def _handle_response(self, response: Dict) -> Dict:
         """Обработка ответа от Bybit API"""

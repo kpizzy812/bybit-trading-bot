@@ -60,6 +60,9 @@ class PositionMonitor:
         self.check_interval = check_interval
         self.testnet = testnet
 
+        # Создаем клиент один раз
+        self.client = BybitClient(testnet=testnet)
+
         # Храним snapshot открытых позиций по user_id
         # {user_id: {position_key: PositionSnapshot}}
         self.positions_cache: Dict[int, Dict[str, PositionSnapshot]] = {}
@@ -126,8 +129,7 @@ class PositionMonitor:
         """Проверить позиции конкретного пользователя"""
         try:
             # Получаем текущие позиции с Bybit
-            client = BybitClient(testnet=self.testnet)
-            current_positions = await client.get_positions()
+            current_positions = await self.client.get_positions()
 
             # Преобразуем в словарь {position_key: PositionSnapshot}
             current_dict = {}

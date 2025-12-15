@@ -354,8 +354,14 @@ class RiskCalculator:
         try:
             balance = await self.bybit.get_wallet_balance()
 
-            # Используем availableBalance (НЕ availableToWithdraw!)
-            available = float(balance.get('availableBalance', 0))
+            # Вычисляем доступный баланс:
+            # available = equity - totalPositionIM - totalOrderIM
+            equity = float(balance.get('equity', 0))
+            total_position_im = float(balance.get('totalPositionIM', 0))
+            total_order_im = float(balance.get('totalOrderIM', 0))
+            available = equity - total_position_im - total_order_im
+
+            logger.info(f"Balance: equity=${equity}, totalPositionIM=${total_position_im}, totalOrderIM=${total_order_im}, available=${available}")
 
             # Если задан trading_capital, используем его вместо баланса
             if trading_capital:

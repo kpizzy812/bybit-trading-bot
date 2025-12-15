@@ -26,11 +26,15 @@ class WalletMixin:
             )
             result = self._handle_response(response)
 
+            logger.info(f"Wallet balance response: {result}")
+
             # Ищем USDT баланс
             for coin in result.get('list', [{}])[0].get('coin', []):
                 if coin.get('coin') == 'USDT':
+                    logger.info(f"USDT balance found: {coin}")
                     return coin
 
+            logger.error(f"USDT not found in coins: {result.get('list', [{}])[0].get('coin', [])}")
             raise BybitError("USDT balance not found")
 
         except Exception as e:
