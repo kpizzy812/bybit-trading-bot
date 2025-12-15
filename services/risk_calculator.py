@@ -97,6 +97,17 @@ class RiskCalculator:
         # Leverage НЕ влияет на PnL!
 
         stop_distance = abs(entry_price - stop_price)
+
+        # Защита от деления на ноль и слишком малых дистанций
+        if stop_distance <= 0:
+            raise RiskCalculationError("Stop distance is zero or negative")
+
+        # Проверка на микродистанцию (< 0.1% от цены = шумовая зона)
+        if (stop_distance / entry_price) < 0.001:
+            raise RiskCalculationError(
+                f"Stop too tight ({stop_distance / entry_price * 100:.3f}% < 0.1%), noise zone"
+            )
+
         qty_raw = risk_usd / stop_distance
 
         logger.debug(f"Risk calculation: risk=${risk_usd}, distance={stop_distance}, qty_raw={qty_raw}")
@@ -111,7 +122,13 @@ class RiskCalculator:
             raise RiskCalculationError(f"Invalid qty: {error}")
 
         # 6. Проверка minNotional
-        min_notional = float(lot_size_filter.get('minNotionalValue', 5))  # Обычно $5-10
+        # Bybit V5 может хранить minNotional в разных местах
+        min_notional = float(
+            lot_size_filter.get("minNotionalValue")
+            or lot_size_filter.get("minNotional")
+            or instrument_info.get("minNotionalValue")
+            or 5  # Fallback по умолчанию
+        )
         valid, error = validate_notional(qty, entry_price, min_notional)
         if not valid:
             raise RiskCalculationError(f"Position too small: {error}")
@@ -127,6 +144,15 @@ class RiskCalculator:
         entry_price_str = round_price(entry_price, tick_size)
         stop_price_str = round_price(stop_price, tick_size)
 
+        # Валидация округленных цен
+        valid, error = validate_price(float(entry_price_str), min_price, max_price, tick_size)
+        if not valid:
+            raise RiskCalculationError(f"Invalid entry price: {error}")
+
+        valid, error = validate_price(float(stop_price_str), min_price, max_price, tick_size)
+        if not valid:
+            raise RiskCalculationError(f"Invalid stop price: {error}")
+
         # 10. Расчёт приблизительной ликвидации (ОСТОРОЖНО - упрощённая формула!)
         liq_price_estimate = self._estimate_liquidation_price(
             side, entry_price, qty, leverage
@@ -137,7 +163,20 @@ class RiskCalculator:
         tp_price_str = None
         if tp_price:
             tp_price_str = round_price(tp_price, tick_size)
-            tp_distance = abs(tp_price - entry_price)
+
+            # Валидация TP цены
+            valid, error = validate_price(float(tp_price_str), min_price, max_price, tick_size)
+            if not valid:
+                raise RiskCalculationError(f"Invalid TP price: {error}")
+
+            # Расчёт RR с явным различием Long/Short
+            if side == "Long":
+                # Long: reward = (tp - entry), risk = (entry - stop)
+                tp_distance = tp_price - entry_price
+            else:  # Short
+                # Short: reward = (entry - tp), risk = (stop - entry)
+                tp_distance = entry_price - tp_price
+
             rr = tp_distance / stop_distance
 
         # 12. Расчёт stop distance в %
@@ -250,6 +289,7 @@ class RiskCalculator:
     async def validate_balance(
         self,
         required_margin: float,
+        actual_risk_usd: Optional[float] = None,
         max_risk_per_trade: Optional[float] = None,
         max_margin_per_trade: Optional[float] = None,
         trading_capital: Optional[float] = None
@@ -259,6 +299,7 @@ class RiskCalculator:
 
         Args:
             required_margin: Требуемая маржа для позиции
+            actual_risk_usd: Фактический риск в USD (опционально)
             max_risk_per_trade: Максимальный риск на сделку (из настроек)
             max_margin_per_trade: Максимальная маржа на сделку (из настроек)
             trading_capital: Фиксированный торговый капитал (опционально)
@@ -280,6 +321,10 @@ class RiskCalculator:
             # Проверка доступного баланса
             if required_margin > available:
                 return False, f"💸 Insufficient balance: need ${required_margin:.2f}, available ${available:.2f}"
+
+            # Проверка макс. риска
+            if max_risk_per_trade and actual_risk_usd and actual_risk_usd > max_risk_per_trade:
+                return False, f"⚠️ Risk ${actual_risk_usd:.2f} exceeds max ${max_risk_per_trade:.2f}"
 
             # Проверка макс. маржи
             if max_margin_per_trade and required_margin > max_margin_per_trade:
