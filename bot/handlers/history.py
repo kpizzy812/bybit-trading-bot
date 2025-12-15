@@ -1,0 +1,257 @@
+"""
+Хендлеры для истории сделок
+"""
+from aiogram import Router, F
+from aiogram.types import CallbackQuery
+from datetime import datetime
+import logging
+
+from bot.keyboards.history_kb import (
+    get_history_main_kb,
+    get_history_list_kb,
+    get_history_filters_kb,
+    get_stats_kb
+)
+
+logger = logging.getLogger(__name__)
+router = Router()
+
+
+# ============================================================
+# CALLBACK: Главное меню истории
+# ============================================================
+
+@router.callback_query(F.data == "hist_main")
+async def show_history_main(callback: CallbackQuery):
+    """Главное меню истории"""
+    await callback.answer()
+
+    text = """
+🧾 <b>История сделок</b>
+
+Здесь ты можешь:
+• Просмотреть закрытые сделки
+• Проанализировать статистику
+• Отфильтровать по символам
+
+Выбери действие ниже:
+"""
+
+    await callback.message.edit_text(
+        text.strip(),
+        reply_markup=get_history_main_kb()
+    )
+
+
+# ============================================================
+# CALLBACK: Последние сделки
+# ============================================================
+
+@router.callback_query(F.data == "hist_recent")
+async def show_recent_trades(callback: CallbackQuery, trade_logger):
+    """Показать последние сделки"""
+    await callback.answer("📋 Загружаю историю...")
+
+    user_id = callback.from_user.id
+
+    try:
+        # Получаем последние 20 сделок
+        trades = await trade_logger.get_trades(user_id, limit=20, offset=0)
+
+        if not trades:
+            await callback.message.edit_text(
+                "🧾 <b>История сделок пуста</b>\n\n"
+                "Здесь будут отображаться твои закрытые позиции.\n\n"
+                "💡 Открой первую сделку через <b>➕ Открыть сделку</b>",
+                reply_markup=get_history_main_kb()
+            )
+            return
+
+        # Формируем текст со списком сделок
+        text = "📋 <b>Последние сделки:</b>\n\n"
+
+        for trade in trades:
+            # Парсим данные
+            symbol = trade.symbol
+            side = trade.side
+            outcome = trade.outcome or "unknown"
+            pnl = trade.pnl_usd or 0
+            roe = trade.roe_percent or 0
+            timestamp = datetime.fromisoformat(trade.timestamp).strftime("%d.%m %H:%M")
+
+            # Эмодзи
+            side_emoji = "🟢" if side == "Buy" else "🔴"
+            outcome_emoji = "✅" if outcome == "win" else ("❌" if outcome == "loss" else "➖")
+
+            text += (
+                f"{outcome_emoji} {side_emoji} <b>{symbol}</b> | {timestamp}\n"
+                f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
+                f"  Entry: ${trade.entry_price:.4f} → Exit: ${trade.exit_price:.4f}\n\n"
+            )
+
+        # Проверяем, есть ли ещё сделки
+        has_next = len(trades) == 20
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_history_list_kb(has_next=has_next, offset=0)
+        )
+
+    except Exception as e:
+        logger.error(f"Error showing recent trades: {e}")
+        await callback.message.edit_text(
+            f"❌ Ошибка при загрузке истории:\n{str(e)}",
+            reply_markup=get_history_main_kb()
+        )
+
+
+# ============================================================
+# CALLBACK: Пагинация
+# ============================================================
+
+@router.callback_query(F.data.startswith("hist_page:"))
+async def show_trades_page(callback: CallbackQuery, trade_logger):
+    """Показать страницу истории с пагинацией"""
+    # Парсим offset
+    offset = int(callback.data.split(":")[1])
+
+    await callback.answer("📋 Загружаю...")
+
+    user_id = callback.from_user.id
+
+    try:
+        trades = await trade_logger.get_trades(user_id, limit=20, offset=offset)
+
+        if not trades:
+            await callback.answer("📋 Больше сделок нет", show_alert=True)
+            return
+
+        # Формируем текст
+        text = f"📋 <b>История сделок (стр. {offset // 20 + 1}):</b>\n\n"
+
+        for trade in trades:
+            symbol = trade.symbol
+            side = trade.side
+            outcome = trade.outcome or "unknown"
+            pnl = trade.pnl_usd or 0
+            roe = trade.roe_percent or 0
+            timestamp = datetime.fromisoformat(trade.timestamp).strftime("%d.%m %H:%M")
+
+            side_emoji = "🟢" if side == "Buy" else "🔴"
+            outcome_emoji = "✅" if outcome == "win" else ("❌" if outcome == "loss" else "➖")
+
+            text += (
+                f"{outcome_emoji} {side_emoji} <b>{symbol}</b> | {timestamp}\n"
+                f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
+                f"  Entry: ${trade.entry_price:.4f} → Exit: ${trade.exit_price:.4f}\n\n"
+            )
+
+        has_next = len(trades) == 20
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_history_list_kb(has_next=has_next, offset=offset)
+        )
+
+    except Exception as e:
+        logger.error(f"Error showing trades page: {e}")
+        await callback.answer("❌ Ошибка при загрузке", show_alert=True)
+
+
+# ============================================================
+# CALLBACK: Статистика
+# ============================================================
+
+@router.callback_query(F.data == "hist_stats")
+async def show_statistics(callback: CallbackQuery, trade_logger):
+    """Показать статистику по сделкам"""
+    await callback.answer("📊 Загружаю статистику...")
+
+    user_id = callback.from_user.id
+
+    try:
+        # Получаем статистику по последним 100 сделкам
+        stats = await trade_logger.get_statistics(user_id, limit=100)
+
+        if stats['total_trades'] == 0:
+            await callback.message.edit_text(
+                "📊 <b>Статистика недоступна</b>\n\n"
+                "Здесь будет отображаться твоя статистика после первых сделок.",
+                reply_markup=get_stats_kb()
+            )
+            return
+
+        # Формируем текст статистики
+        total = stats['total_trades']
+        winrate = stats['winrate']
+        total_pnl = stats['total_pnl']
+        avg_win = stats['avg_win']
+        avg_loss = stats['avg_loss']
+        best = stats['best_trade']
+        worst = stats['worst_trade']
+        avg_rr = stats['avg_rr']
+        long_trades = stats['long_trades']
+        short_trades = stats['short_trades']
+
+        text = f"""
+📊 <b>Статистика (последние {total} сделок)</b>
+
+<b>Общие показатели:</b>
+✅ Винрейт: {winrate:.1f}%
+💰 Общий PnL: ${total_pnl:+.2f}
+📈 Средний RR: {avg_rr:.2f}
+
+<b>PnL:</b>
+💰 Средний профит: ${avg_win:.2f}
+📉 Средний убыток: ${avg_loss:.2f}
+🏆 Лучшая сделка: ${best:+.2f}
+💔 Худшая сделка: ${worst:+.2f}
+
+<b>Направления:</b>
+🟢 Long: {long_trades} ({long_trades/total*100:.1f}%)
+🔴 Short: {short_trades} ({short_trades/total*100:.1f}%)
+"""
+
+        # Статистика по символам
+        if stats['symbols']:
+            text += "\n<b>По символам:</b>\n"
+            for symbol, symbol_stats in stats['symbols'].items():
+                count = symbol_stats['count']
+                pnl = symbol_stats['pnl']
+                wins = symbol_stats['wins']
+                winrate_symbol = (wins / count * 100) if count > 0 else 0
+
+                text += f"• {symbol}: {count} сделок, ${pnl:+.2f} ({winrate_symbol:.0f}% WR)\n"
+
+        await callback.message.edit_text(
+            text.strip(),
+            reply_markup=get_stats_kb()
+        )
+
+    except Exception as e:
+        logger.error(f"Error showing statistics: {e}")
+        await callback.message.edit_text(
+            f"❌ Ошибка при загрузке статистики:\n{str(e)}",
+            reply_markup=get_stats_kb()
+        )
+
+
+# ============================================================
+# CALLBACK: Фильтры
+# ============================================================
+
+@router.callback_query(F.data == "hist_filters")
+async def show_filters_menu(callback: CallbackQuery):
+    """Меню фильтров (заглушка на будущее)"""
+    await callback.answer()
+
+    await callback.message.edit_text(
+        "🔍 <b>Фильтры истории</b>\n\n"
+        "⚠️ Фильтрация в разработке...\n\n"
+        "В будущем здесь можно будет фильтровать по:\n"
+        "• Символам\n"
+        "• Направлению (Long/Short)\n"
+        "• Датам\n"
+        "• PnL (win/loss)",
+        reply_markup=get_history_filters_kb()
+    )

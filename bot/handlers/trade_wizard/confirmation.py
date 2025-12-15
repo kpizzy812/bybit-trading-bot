@@ -7,6 +7,7 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from aiogram.fsm.context import FSMContext
 from loguru import logger
+from datetime import datetime
 
 import config
 from bot.states.trade_states import TradeStates
@@ -14,6 +15,7 @@ from bot.keyboards import trade_kb
 from bot.keyboards.main_menu import get_main_menu
 from services.bybit import BybitClient, BybitError
 from services.risk_calculator import RiskCalculator, RiskCalculationError
+from services.trade_logger import TradeRecord
 from utils.validators import round_qty, round_price
 
 router = Router()
@@ -92,7 +94,7 @@ async def move_to_confirmation(message_or_query, state: FSMContext):
 
 
 @router.callback_query(TradeStates.confirmation, F.data == "trade:confirm")
-async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_storage, lock_manager):
+async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_storage, lock_manager, trade_logger):
     """Выполнение сделки - полная реализация"""
     user_id = callback.from_user.id
 
@@ -382,6 +384,63 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
 
         await callback.message.edit_text(success_text, reply_markup=None)
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+
+        # ===== Логирование сделки =====
+        try:
+            # Рассчитываем TP цену для логирования
+            tp_price_for_log = None
+            rr_planned = None
+
+            if tp_mode == "single":
+                tp_price_for_log = data.get('tp_price')
+                tp_distance = abs(tp_price_for_log - actual_entry_price)
+                rr_planned = tp_distance / actual_stop_distance
+
+            elif tp_mode == "rr":
+                tp_rr = data.get('tp_rr', 2.0)
+                rr_planned = tp_rr
+                if side == "Buy":
+                    tp_price_for_log = actual_entry_price + (actual_stop_distance * tp_rr)
+                else:
+                    tp_price_for_log = actual_entry_price - (actual_stop_distance * tp_rr)
+
+            elif tp_mode == "ladder":
+                # Для ladder берем средний RR
+                tp_rr_1 = data.get('tp_rr_1', 2.0)
+                tp_rr_2 = data.get('tp_rr_2', 3.0)
+                rr_planned = (tp_rr_1 + tp_rr_2) / 2
+
+            # Создаем запись о сделке
+            trade_record = TradeRecord(
+                trade_id=trade_id,
+                user_id=user_id,
+                timestamp=datetime.utcnow().isoformat(),
+                symbol=symbol,
+                side=side,
+                entry_price=actual_entry_price,
+                exit_price=None,  # Будет заполнено при закрытии
+                qty=actual_qty,
+                leverage=leverage,
+                margin_mode=settings.default_margin_mode,
+                stop_price=stop_price,
+                tp_price=tp_price_for_log,
+                risk_usd=actual_risk,
+                pnl_usd=None,  # Будет заполнено при закрытии
+                pnl_percent=None,  # Будет заполнено при закрытии
+                roe_percent=None,  # Будет заполнено при закрытии
+                outcome=None,  # Будет заполнено при закрытии
+                rr_planned=rr_planned,
+                rr_actual=None,  # Будет заполнено при закрытии
+                status="open"  # Статус: открыта
+            )
+
+            # Логируем сделку
+            await trade_logger.log_trade(trade_record)
+            logger.info(f"Trade logged: {trade_id}")
+
+        except Exception as log_error:
+            # Не падаем, если логирование не удалось
+            logger.error(f"Failed to log trade: {log_error}")
 
         logger.info(f"Trade executed successfully: {symbol} {side} @ ${actual_entry_price:.4f}")
 

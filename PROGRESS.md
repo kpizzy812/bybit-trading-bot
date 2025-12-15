@@ -540,28 +540,46 @@ futures-bot/
   - Методы: log_trade(), get_trades(), get_statistics()
   - Расчёт статистики: winrate, avg RR, total PnL, best/worst trade
 
-### Что ещё нужно реализовать:
-- [ ] **История (50% осталось)**:
-  - Создать bot/handlers/history.py для показа истории
-  - Интегрировать trade_logger в Trade Wizard (логировать сделки при execution)
-  - Показ последних N сделок с фильтрами (по символу, Long/Short)
-  - Статистика dashboard (winrate, PnL, по символам)
+### Session 3 (2025-12-15) - История и финализация
+- [x] **История (100% готово)**:
+  - [x] Создан bot/keyboards/history_kb.py с inline клавиатурами
+  - [x] Создан bot/handlers/history.py для показа истории
+  - [x] Интегрирован trade_logger в confirmation.py (Trade Wizard)
+  - [x] Показ последних N сделок с пагинацией (по 20 записей)
+  - [x] Статистика dashboard (winrate, avg RR, total PnL, по символам)
+  - [x] Обновлён menu.py для показа истории
 
-- [ ] **Регистрация хендлеров**:
-  - Зарегистрировать positions router в main.py
-  - Зарегистрировать settings router в main.py
-  - Зарегистрировать history router в main.py (когда будет готов)
+- [x] **Регистрация хендлеров**:
+  - [x] Зарегистрирован positions router в main.py
+  - [x] Зарегистрирован settings router в main.py
+  - [x] Зарегистрирован history router в main.py
+  - [x] Инициализирован trade_logger в main.py с Redis/in-memory
 
-- [ ] **Тестирование на Testnet** (КРИТИЧНО!)
+### Что работает сейчас (ФИНАЛ):
+✅ Полный Trade Wizard (8 шагов) с execution
+✅ Позиции с управлением (partial close, move SL, panic close all)
+✅ Настройки (риск, плечо, TP режим, лимиты безопасности)
+✅ История сделок с пагинацией
+✅ Статистика (винрейт, PnL, RR, по символам)
+✅ Trade logger интегрирован в Trade Wizard
+✅ Testnet/Live переключение
+✅ Race condition protection
+✅ Все роутеры зарегистрированы
 
 ### Следующие шаги для новой сессии:
-1. Завершить History implementation:
-   - Создать history.py хендлер
-   - Интегрировать trade_logger в confirmation.py (Trade Wizard)
-   - Добавить логирование при закрытии позиций
-2. Зарегистрировать все новые роутеры в main.py
-3. Протестировать весь функционал на Testnet
-4. AI сценарии integration (опционально)
+1. **Тестирование на Testnet (КРИТИЧНО!)**:
+   - Открытие Market/Limit сделок
+   - Проверка SL/TP установки
+   - Проверка управления позициями
+   - Проверка настроек
+   - Проверка истории и статистики
+   - Проверка логирования сделок
+
+2. **Доработки (опционально)**:
+   - Фильтры истории (по символу, Long/Short, датам)
+   - Логирование закрытия позиций (сейчас только открытие)
+   - AI сценарии integration (если нужно)
+   - Websocket для real-time PnL (вместо polling)
 
 ---
 

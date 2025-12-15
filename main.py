@@ -8,10 +8,11 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from loguru import logger
 
 import config
-from bot.handlers import start, menu
+from bot.handlers import start, menu, positions, settings, history
 from bot.handlers import trade_wizard
 from bot.middlewares.owner_check import OwnerCheckMiddleware
 from storage.user_settings import create_storage_instances
+from services.trade_logger import create_trade_logger
 
 
 class InterceptHandler(logging.Handler):
@@ -80,10 +81,16 @@ async def main():
     await settings_storage.connect()
     await lock_manager.connect()
 
+    # Инициализация trade logger
+    logger.info("Initializing trade logger...")
+    trade_logger = create_trade_logger()
+    await trade_logger.connect()
+
     # Сохраняем в workflow_data для доступа из хэндлеров
     dp.workflow_data.update({
         'settings_storage': settings_storage,
-        'lock_manager': lock_manager
+        'lock_manager': lock_manager,
+        'trade_logger': trade_logger
     })
 
     # Регистрация middleware
@@ -95,6 +102,9 @@ async def main():
     logger.info("Registering handlers...")
     dp.include_router(start.router)
     dp.include_router(menu.router)
+    dp.include_router(positions.router)
+    dp.include_router(settings.router)
+    dp.include_router(history.router)
     dp.include_router(trade_wizard.router)
 
     # Запуск бота
@@ -109,6 +119,7 @@ async def main():
         logger.info("Shutting down...")
         await settings_storage.close()
         await lock_manager.close()
+        await trade_logger.close()
         await bot.session.close()
 
 
