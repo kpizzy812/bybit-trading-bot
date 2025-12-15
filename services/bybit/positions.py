@@ -22,8 +22,14 @@ class PositionsMixin:
             logger.info(f"Leverage set to {leverage}x for {symbol}")
 
         except Exception as e:
+            error_str = str(e)
+            # Игнорируем ошибку "leverage not modified" - это не ошибка, leverage уже установлен
+            if "110043" in error_str or "leverage not modified" in error_str.lower():
+                logger.info(f"Leverage already set to {leverage}x for {symbol}")
+                return
+
             logger.error(f"Error setting leverage for {symbol}: {e}")
-            raise BybitError(f"Failed to set leverage: {str(e)}")
+            raise BybitError(f"Failed to set leverage: {error_str}")
 
     async def get_positions(self, symbol: Optional[str] = None) -> List[Dict]:
         """
