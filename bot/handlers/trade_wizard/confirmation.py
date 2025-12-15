@@ -339,23 +339,55 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
                 tp2_price_str = round_price(tp2_price, tick_size)
 
                 # Разделить qty пополам
-                qty_half = actual_qty / 2
                 qty_step = instrument_info['qtyStep']
+                qty_half = actual_qty / 2
 
-                qty1 = round_qty(qty_half, qty_step, round_down=True)
-                qty2 = round_qty(actual_qty - float(qty1), qty_step, round_down=True)
+                # Проверка: можем ли разделить позицию на 2 части?
+                # Минимальная qty для каждого уровня должна быть >= qtyStep
+                min_qty_per_level = float(qty_step)
 
-                # Разместить ladder TP
-                await bybit.place_ladder_tp(
-                    symbol=symbol,
-                    position_side=side,
-                    tp_levels=[
-                        {'price': tp1_price_str, 'qty': qty1},
-                        {'price': tp2_price_str, 'qty': qty2}
-                    ],
-                    client_order_id_prefix=trade_id
-                )
-                logger.info(f"Ladder TP set: TP1=${tp1_price_str} ({qty1}), TP2=${tp2_price_str} ({qty2})")
+                if qty_half >= min_qty_per_level:
+                    # Можем разделить
+                    qty1 = round_qty(qty_half, qty_step, round_down=True)
+                    qty2 = round_qty(actual_qty - float(qty1), qty_step, round_down=True)
+
+                    # Проверка после округления: оба должны быть > 0
+                    if float(qty1) > 0 and float(qty2) > 0:
+                        # Разместить ladder TP
+                        await bybit.place_ladder_tp(
+                            symbol=symbol,
+                            position_side=side,
+                            tp_levels=[
+                                {'price': tp1_price_str, 'qty': qty1},
+                                {'price': tp2_price_str, 'qty': qty2}
+                            ],
+                            client_order_id_prefix=trade_id
+                        )
+                        logger.info(f"Ladder TP set: TP1=${tp1_price_str} ({qty1}), TP2=${tp2_price_str} ({qty2})")
+                    else:
+                        # Fallback: один TP на первом уровне (100% позиции)
+                        logger.warning(f"Qty too small for ladder after rounding. Using single TP at level 1")
+                        await bybit.place_ladder_tp(
+                            symbol=symbol,
+                            position_side=side,
+                            tp_levels=[
+                                {'price': tp1_price_str, 'qty': str(actual_qty)}
+                            ],
+                            client_order_id_prefix=trade_id
+                        )
+                        logger.info(f"Single TP (fallback) set: TP1=${tp1_price_str} ({actual_qty})")
+                else:
+                    # Позиция слишком маленькая для ladder - используем один TP на первом уровне
+                    logger.warning(f"Position size too small for ladder TP (min {min_qty_per_level} per level). Using single TP.")
+                    await bybit.place_ladder_tp(
+                        symbol=symbol,
+                        position_side=side,
+                        tp_levels=[
+                            {'price': tp1_price_str, 'qty': str(actual_qty)}
+                        ],
+                        client_order_id_prefix=trade_id
+                    )
+                    logger.info(f"Single TP (size limit) set: TP1=${tp1_price_str} ({actual_qty})")
 
         except Exception as tp_error:
             logger.error(f"Error setting Take Profit: {tp_error}", exc_info=True)
@@ -475,7 +507,8 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
                 outcome=None,  # Будет заполнено при закрытии
                 rr_planned=rr_planned,
                 rr_actual=None,  # Будет заполнено при закрытии
-                status="open"  # Статус: открыта
+                status="open",  # Статус: открыта
+                testnet=testnet_mode  # Режим торговли
             )
 
             # Логируем сделку

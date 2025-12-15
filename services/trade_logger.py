@@ -39,6 +39,7 @@ class TradeRecord:
     rr_planned: Optional[float] = None
     rr_actual: Optional[float] = None
     status: str = "closed"  # "closed", "liquidated", "partial", "open"
+    testnet: bool = False  # True если сделка на testnet
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -127,13 +128,71 @@ class TradeLogger:
 
         logger.info(f"Trade logged (in-memory) for user {user_id}: {trade_record.trade_id}")
 
+    async def _replace_trade(self, user_id: int, updated_trade: TradeRecord):
+        """
+        Заменить существующую сделку на обновленную (избегаем дубликатов)
+
+        Args:
+            user_id: ID пользователя
+            updated_trade: Обновленная запись
+        """
+        if self.use_redis and self.redis:
+            try:
+                key = self._trades_key(user_id)
+
+                # Получаем все сделки
+                all_trades_json = await self.redis.lrange(key, 0, -1)
+
+                # Удаляем старую запись с тем же trade_id
+                for trade_json in all_trades_json:
+                    try:
+                        trade_dict = json.loads(trade_json)
+                        if trade_dict.get('trade_id') == updated_trade.trade_id:
+                            # Удаляем эту запись
+                            await self.redis.lrem(key, 1, trade_json)
+                            break
+                    except Exception as e:
+                        logger.error(f"Error parsing trade during replace: {e}")
+
+                # Добавляем обновленную в начало
+                updated_json = json.dumps(updated_trade.to_dict())
+                await self.redis.lpush(key, updated_json)
+
+                # Обрезаем список
+                await self.redis.ltrim(key, 0, self.max_trades_per_user - 1)
+
+                logger.info(f"Trade replaced for user {user_id}: {updated_trade.trade_id}")
+                return
+
+            except Exception as e:
+                logger.error(f"Error replacing trade in Redis: {e}")
+
+        # Fallback to in-memory
+        if user_id not in self.in_memory_trades:
+            self.in_memory_trades[user_id] = []
+
+        # Удаляем старую запись с тем же trade_id
+        self.in_memory_trades[user_id] = [
+            t for t in self.in_memory_trades[user_id]
+            if t.trade_id != updated_trade.trade_id
+        ]
+
+        # Добавляем обновленную в начало
+        self.in_memory_trades[user_id].insert(0, updated_trade)
+
+        # Обрезаем до max_trades
+        self.in_memory_trades[user_id] = self.in_memory_trades[user_id][:self.max_trades_per_user]
+
+        logger.info(f"Trade replaced (in-memory) for user {user_id}: {updated_trade.trade_id}")
+
     async def get_trades(
         self,
         user_id: int,
         limit: int = 20,
         offset: int = 0,
         symbol: Optional[str] = None,
-        side: Optional[str] = None
+        side: Optional[str] = None,
+        testnet: Optional[bool] = None
     ) -> List[TradeRecord]:
         """
         Получить историю сделок
@@ -144,6 +203,7 @@ class TradeLogger:
             offset: Смещение (для пагинации)
             symbol: Фильтр по символу (опционально)
             side: Фильтр по направлению (опционально)
+            testnet: Фильтр по режиму (True=testnet, False=live, None=все)
 
         Returns:
             Список TradeRecord
@@ -181,6 +241,9 @@ class TradeLogger:
         if side:
             trades = [t for t in trades if t.side == side]
 
+        if testnet is not None:
+            trades = [t for t in trades if getattr(t, 'testnet', False) == testnet]
+
         return trades
 
     async def update_trade_on_close(
@@ -190,7 +253,8 @@ class TradeLogger:
         exit_price: float,
         pnl_usd: float,
         closed_qty: float = None,
-        is_partial: bool = False
+        is_partial: bool = False,
+        testnet: Optional[bool] = None
     ):
         """
         Обновить сделку при закрытии позиции
@@ -202,9 +266,10 @@ class TradeLogger:
             pnl_usd: PnL в USD
             closed_qty: Закрытое количество (для partial)
             is_partial: Частичное закрытие или полное
+            testnet: Фильтр по режиму (True=testnet, False=live, None=все)
         """
-        # Получаем все сделки пользователя
-        all_trades = await self.get_trades(user_id, limit=100)
+        # Получаем все сделки пользователя для текущего режима
+        all_trades = await self.get_trades(user_id, limit=100, testnet=testnet)
 
         # Ищем последнюю открытую сделку по символу
         target_trade = None
@@ -252,23 +317,24 @@ class TradeLogger:
         # Обновляем timestamp закрытия
         target_trade.timestamp = datetime.utcnow().isoformat()
 
-        # Сохраняем обновленную запись
-        await self.log_trade(target_trade)
+        # Удаляем старую запись и добавляем обновленную
+        await self._replace_trade(user_id, target_trade)
 
         logger.info(f"Trade updated on close: {target_trade.trade_id} (PnL: ${pnl_usd:+.2f})")
 
-    async def get_statistics(self, user_id: int, limit: int = 100) -> Dict:
+    async def get_statistics(self, user_id: int, limit: int = 100, testnet: Optional[bool] = None) -> Dict:
         """
         Получить статистику по сделкам
 
         Args:
             user_id: ID пользователя
             limit: Количество последних сделок для анализа
+            testnet: Фильтр по режиму (True=testnet, False=live, None=все)
 
         Returns:
             Dict со статистикой
         """
-        trades = await self.get_trades(user_id, limit=limit)
+        trades = await self.get_trades(user_id, limit=limit, testnet=testnet)
 
         if not trades:
             return {

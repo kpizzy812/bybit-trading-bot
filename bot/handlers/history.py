@@ -48,15 +48,17 @@ async def show_history_main(callback: CallbackQuery):
 # ============================================================
 
 @router.callback_query(F.data == "hist_recent")
-async def show_recent_trades(callback: CallbackQuery, trade_logger):
+async def show_recent_trades(callback: CallbackQuery, trade_logger, settings_storage):
     """Показать последние сделки"""
     await callback.answer("📋 Загружаю историю...")
 
     user_id = callback.from_user.id
+    user_settings = await settings_storage.get_settings(user_id)
+    testnet_mode = user_settings.testnet_mode
 
     try:
-        # Получаем последние 20 сделок
-        trades = await trade_logger.get_trades(user_id, limit=20, offset=0)
+        # Получаем последние 20 сделок для текущего режима
+        trades = await trade_logger.get_trades(user_id, limit=20, offset=0, testnet=testnet_mode)
 
         if not trades:
             await callback.message.edit_text(
@@ -93,8 +95,11 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger):
             # Exit price может быть None для открытых позиций
             exit_str = f"${trade.exit_price:.4f}" if trade.exit_price else "открыта"
 
+            # Индикатор режима (testnet/live)
+            mode_indicator = "🧪" if getattr(trade, 'testnet', False) else "💰"
+
             text += (
-                f"{outcome_emoji} {side_emoji} <b>{symbol}</b> | {timestamp}\n"
+                f"{outcome_emoji} {side_emoji} <b>{symbol}</b> {mode_indicator} | {timestamp}\n"
                 f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
                 f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}\n\n"
             )
@@ -120,7 +125,7 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger):
 # ============================================================
 
 @router.callback_query(F.data.startswith("hist_page:"))
-async def show_trades_page(callback: CallbackQuery, trade_logger):
+async def show_trades_page(callback: CallbackQuery, trade_logger, settings_storage):
     """Показать страницу истории с пагинацией"""
     # Парсим offset
     offset = int(callback.data.split(":")[1])
@@ -128,9 +133,11 @@ async def show_trades_page(callback: CallbackQuery, trade_logger):
     await callback.answer("📋 Загружаю...")
 
     user_id = callback.from_user.id
+    user_settings = await settings_storage.get_settings(user_id)
+    testnet_mode = user_settings.testnet_mode
 
     try:
-        trades = await trade_logger.get_trades(user_id, limit=20, offset=offset)
+        trades = await trade_logger.get_trades(user_id, limit=20, offset=offset, testnet=testnet_mode)
 
         if not trades:
             await callback.answer("📋 Больше сделок нет", show_alert=True)
@@ -159,8 +166,11 @@ async def show_trades_page(callback: CallbackQuery, trade_logger):
 
             exit_str = f"${trade.exit_price:.4f}" if trade.exit_price else "открыта"
 
+            # Индикатор режима (testnet/live)
+            mode_indicator = "🧪" if getattr(trade, 'testnet', False) else "💰"
+
             text += (
-                f"{outcome_emoji} {side_emoji} <b>{symbol}</b> | {timestamp}\n"
+                f"{outcome_emoji} {side_emoji} <b>{symbol}</b> {mode_indicator} | {timestamp}\n"
                 f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
                 f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}\n\n"
             )
@@ -182,15 +192,17 @@ async def show_trades_page(callback: CallbackQuery, trade_logger):
 # ============================================================
 
 @router.callback_query(F.data == "hist_stats")
-async def show_statistics(callback: CallbackQuery, trade_logger):
+async def show_statistics(callback: CallbackQuery, trade_logger, settings_storage):
     """Показать статистику по сделкам"""
     await callback.answer("📊 Загружаю статистику...")
 
     user_id = callback.from_user.id
+    user_settings = await settings_storage.get_settings(user_id)
+    testnet_mode = user_settings.testnet_mode
 
     try:
-        # Получаем статистику по последним 100 сделкам
-        stats = await trade_logger.get_statistics(user_id, limit=100)
+        # Получаем статистику по последним 100 сделкам для текущего режима
+        stats = await trade_logger.get_statistics(user_id, limit=100, testnet=testnet_mode)
 
         if stats['total_trades'] == 0:
             await callback.message.edit_text(
