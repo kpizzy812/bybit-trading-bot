@@ -531,10 +531,13 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
             actual_qty = float(filled_order['qty'])
         else:
             # Limit order - размещаем БЕЗ ожидания fill
-            # SL ставим сразу на ордер, TP будет через ladder после исполнения
+            # SL ставим на ордер, TP через ladder после fill
             tick_size = position_calc.get('instrument_info', {}).get('tickSize', '0.01')
             entry_price_str = round_price(entry_price, tick_size)
             stop_price_str = round_price(stop_price, tick_size)
+
+            # TP НЕ ставим на ордер - используем ladder TP после fill
+            # (Bybit TP на ордере закрывает всю позицию, нам нужны partial closes)
 
             entry_order = await bybit.place_order(
                 symbol=symbol,
