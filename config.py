@@ -242,6 +242,45 @@ POSITION_MONITOR_INTERVAL = int(os.getenv('POSITION_MONITOR_INTERVAL', 15))
 
 
 # ============================================================
+# AUTO BREAKEVEN SETTINGS
+# ============================================================
+
+# Включить автоматический перенос SL на entry после TP1
+AUTO_BREAKEVEN_ENABLED = os.getenv('AUTO_BREAKEVEN_ENABLED', 'true').lower() == 'true'
+
+# Добавить буфер к breakeven (чтобы не попасть на ровный 0)
+# Например, 0.001 = 0.1% выше entry для Long
+BREAKEVEN_BUFFER_PCT = float(os.getenv('BREAKEVEN_BUFFER_PCT', 0.001))
+
+
+# ============================================================
+# ACTIVE POSITIONS LIMIT
+# ============================================================
+
+# Максимальное количество одновременных открытых позиций
+MAX_ACTIVE_POSITIONS = int(os.getenv('MAX_ACTIVE_POSITIONS', 2))
+
+
+# ============================================================
+# CONFIDENCE-BASED RISK SCALING
+# ============================================================
+
+# Включить масштабирование риска от confidence AI сценария
+CONFIDENCE_RISK_SCALING_ENABLED = os.getenv('CONFIDENCE_RISK_SCALING_ENABLED', 'true').lower() == 'true'
+
+# Минимальный множитель риска (при низком confidence)
+# Например, при confidence=0.5, множитель = 0.7 → риск = base_risk * 0.7
+MIN_CONFIDENCE_MULTIPLIER = float(os.getenv('MIN_CONFIDENCE_MULTIPLIER', 0.7))
+
+# Максимальный множитель риска (при высоком confidence)
+# Например, при confidence=1.0, множитель = 1.3 → риск = base_risk * 1.3
+MAX_CONFIDENCE_MULTIPLIER = float(os.getenv('MAX_CONFIDENCE_MULTIPLIER', 1.3))
+
+# Минимальный confidence для открытия сделки (0-1)
+MIN_CONFIDENCE_THRESHOLD = float(os.getenv('MIN_CONFIDENCE_THRESHOLD', 0.5))
+
+
+# ============================================================
 # CONFIG VALIDATION
 # ============================================================
 

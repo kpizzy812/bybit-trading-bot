@@ -120,6 +120,26 @@ def get_timeframe_keyboard(symbol: str) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_edit_sl_cancel_keyboard(scenario_index: int) -> InlineKeyboardMarkup:
+    """
+    Клавиатура для отмены редактирования SL
+
+    Args:
+        scenario_index: Индекс сценария
+
+    Returns:
+        InlineKeyboardMarkup с кнопкой отмены
+    """
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="❌ Отмена (оставить AI SL)",
+        callback_data=f"ai:cancel_edit:{scenario_index}"
+    )
+
+    return builder.as_markup()
+
+
 def get_confirm_trade_keyboard(scenario_index: int, risk_usd: float) -> InlineKeyboardMarkup:
     """
     Клавиатура подтверждения сделки на основе сценария
@@ -139,9 +159,15 @@ def get_confirm_trade_keyboard(scenario_index: int, risk_usd: float) -> InlineKe
         callback_data=f"ai:confirm:{scenario_index}:{risk_usd}"
     )
 
+    # Редактирование уровней
+    builder.button(
+        text="✏️ Override SL",
+        callback_data=f"ai:edit_sl:{scenario_index}"
+    )
+
     # Изменить риск
     builder.button(
-        text="✏️ Изменить риск",
+        text="💰 Изменить риск",
         callback_data=f"ai:scenario:{scenario_index}"
     )
 

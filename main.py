@@ -15,6 +15,7 @@ from storage.user_settings import create_storage_instances
 from services.trade_logger import create_trade_logger
 from services.position_monitor import create_position_monitor
 from services.order_monitor import create_order_monitor
+from services.breakeven_manager import create_breakeven_manager
 
 
 class InterceptHandler(logging.Handler):
@@ -88,13 +89,24 @@ async def main():
     trade_logger = create_trade_logger()
     await trade_logger.connect()
 
+    # Инициализация breakeven manager
+    logger.info("Initializing breakeven manager...")
+    breakeven_manager = create_breakeven_manager(
+        bot=bot,
+        trade_logger=trade_logger,
+        testnet=config.DEFAULT_TESTNET_MODE
+    )
+    if config.AUTO_BREAKEVEN_ENABLED:
+        logger.info("🛡️ Auto Breakeven enabled")
+
     # Инициализация position monitor
     logger.info("Initializing position monitor...")
     position_monitor = create_position_monitor(
         bot=bot,
         trade_logger=trade_logger,
         testnet=config.DEFAULT_TESTNET_MODE,
-        check_interval=config.POSITION_MONITOR_INTERVAL
+        check_interval=config.POSITION_MONITOR_INTERVAL,
+        breakeven_manager=breakeven_manager
     )
 
     # Автоматически регистрируем owner для мониторинга
@@ -123,7 +135,8 @@ async def main():
         'lock_manager': lock_manager,
         'trade_logger': trade_logger,
         'position_monitor': position_monitor,
-        'order_monitor': order_monitor
+        'order_monitor': order_monitor,
+        'breakeven_manager': breakeven_manager
     })
 
     # Регистрация middleware

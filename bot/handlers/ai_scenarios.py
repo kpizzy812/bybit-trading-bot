@@ -3,6 +3,11 @@ AI Scenarios Handler
 
 Хендлер для работы с торговыми сценариями от Syntra AI.
 Quick execution flow: выбор сценария → выбор риска → подтверждение → execute.
+
+Включает:
+- Confidence-based Risk Scaling (масштабирование риска от уверенности AI)
+- Smart order routing (Market/Limit в зависимости от зоны)
+- Ladder TP support
 """
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
@@ -22,6 +27,57 @@ from services.trade_logger import TradeRecord
 from utils.validators import round_qty, round_price
 
 router = Router()
+
+
+def calculate_confidence_adjusted_risk(
+    base_risk: float,
+    confidence: float,
+    scaling_enabled: bool = True
+) -> tuple[float, float]:
+    """
+    Масштабировать риск на основе confidence AI сценария.
+
+    Логика:
+    - Высокий confidence (0.9+) → увеличиваем риск до 130%
+    - Средний confidence (0.6-0.8) → риск около базового
+    - Низкий confidence (<0.6) → уменьшаем риск до 70%
+
+    Args:
+        base_risk: Базовый риск в USD
+        confidence: Confidence от 0 до 1
+        scaling_enabled: Включено ли масштабирование
+
+    Returns:
+        (adjusted_risk, multiplier)
+    """
+    if not scaling_enabled:
+        return base_risk, 1.0
+
+    # Проверка минимального confidence
+    if confidence < config.MIN_CONFIDENCE_THRESHOLD:
+        logger.warning(f"Confidence {confidence:.2f} below threshold {config.MIN_CONFIDENCE_THRESHOLD}")
+
+    # Линейная интерполяция между MIN и MAX multiplier
+    # confidence=0 → MIN_MULTIPLIER, confidence=1 → MAX_MULTIPLIER
+    min_mult = config.MIN_CONFIDENCE_MULTIPLIER
+    max_mult = config.MAX_CONFIDENCE_MULTIPLIER
+
+    multiplier = min_mult + (confidence * (max_mult - min_mult))
+
+    # Ограничиваем в пределах [MIN, MAX]
+    multiplier = max(min_mult, min(max_mult, multiplier))
+
+    adjusted_risk = base_risk * multiplier
+
+    # Не превышаем max_risk_per_trade
+    adjusted_risk = min(adjusted_risk, config.MAX_RISK_PER_TRADE)
+
+    logger.info(
+        f"Risk scaling: base=${base_risk:.2f}, confidence={confidence:.2f}, "
+        f"multiplier={multiplier:.2f}, adjusted=${adjusted_risk:.2f}"
+    )
+
+    return adjusted_risk, multiplier
 
 
 @router.message(Command("ai_scenarios"))
@@ -299,11 +355,11 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
 
 @router.callback_query(AIScenarioStates.viewing_detail, F.data.startswith("ai:trade:"))
 async def ai_trade_with_risk(callback: CallbackQuery, state: FSMContext, settings_storage):
-    """Пользователь выбрал риск - показать подтверждение"""
+    """Пользователь выбрал риск - показать подтверждение с confidence scaling"""
     # Парсинг: ai:trade:0:10
     parts = callback.data.split(":")
     scenario_index = int(parts[2])
-    risk_usd = float(parts[3])
+    base_risk_usd = float(parts[3])
 
     data = await state.get_data()
     scenarios = data.get("scenarios", [])
@@ -316,21 +372,55 @@ async def ai_trade_with_risk(callback: CallbackQuery, state: FSMContext, setting
     # Используем дефолтное плечо из settings
     leverage = settings.default_leverage
 
-    await state.update_data(risk_usd=risk_usd, leverage=leverage)
+    # === CONFIDENCE-BASED RISK SCALING ===
+    confidence = scenario.get("confidence", 0.5)
+
+    # Применяем масштабирование если включено
+    adjusted_risk, multiplier = calculate_confidence_adjusted_risk(
+        base_risk=base_risk_usd,
+        confidence=confidence,
+        scaling_enabled=settings.confidence_risk_scaling
+    )
+
+    # Сохраняем оба значения в state
+    await state.update_data(
+        base_risk_usd=base_risk_usd,
+        risk_usd=adjusted_risk,
+        risk_multiplier=multiplier,
+        leverage=leverage
+    )
     await state.set_state(AIScenarioStates.confirmation)
 
-    # Рассчитать позицию
-    await show_trade_confirmation(callback.message, scenario, symbol, risk_usd, leverage, settings)
+    # Показать подтверждение с информацией о масштабировании
+    await show_trade_confirmation(
+        callback.message,
+        scenario,
+        symbol,
+        adjusted_risk,
+        leverage,
+        base_risk=base_risk_usd,
+        multiplier=multiplier,
+        scaling_enabled=settings.confidence_risk_scaling
+    )
 
     await callback.answer()
 
 
-async def show_trade_confirmation(message: Message, scenario: dict, symbol: str, risk_usd: float, leverage: int, settings):
-    """Показать карточку подтверждения с расчётами"""
+async def show_trade_confirmation(
+    message: Message,
+    scenario: dict,
+    symbol: str,
+    risk_usd: float,
+    leverage: int,
+    base_risk: float = None,
+    multiplier: float = 1.0,
+    scaling_enabled: bool = False
+):
+    """Показать карточку подтверждения с расчётами и информацией о масштабировании"""
 
     # Получить параметры сценария
     bias = scenario.get("bias", "long")
-    side = "Long" if bias == "long" else "Short"
+    confidence = scenario.get("confidence", 0.5)
     side_emoji = "🟢" if bias == "long" else "🔴"
 
     entry = scenario.get("entry", {})
@@ -361,16 +451,30 @@ async def show_trade_confirmation(message: Message, scenario: dict, symbol: str,
     else:
         tp_info = "🎯 <b>TP:</b> N/A\n"
 
+    # Формируем информацию о риске с масштабированием
+    if scaling_enabled and base_risk and multiplier != 1.0:
+        # Показываем масштабирование
+        multiplier_pct = (multiplier - 1) * 100
+        sign = "+" if multiplier_pct >= 0 else ""
+        risk_info = (
+            f"💰 <b>Risk:</b> ${risk_usd:.2f}\n"
+            f"   <i>(${base_risk:.0f} × {multiplier:.2f} = ${risk_usd:.2f}, "
+            f"conf {confidence*100:.0f}% → {sign}{multiplier_pct:.0f}%)</i>"
+        )
+    else:
+        risk_info = f"💰 <b>Risk:</b> ${risk_usd:.2f}"
+
     # Карточка подтверждения
     card = f"""
 ✅ <b>Подтверждение сделки</b>
 
 {side_emoji} <b>{symbol}</b> {bias.upper()}
+📊 <b>Confidence:</b> {confidence*100:.0f}%
 
 ⚡ <b>Entry:</b> Market @ ${entry_price:.2f}
 🛑 <b>Stop:</b> ${stop_price:.2f}
 {tp_info}
-💰 <b>Risk:</b> ${risk_usd}
+{risk_info}
 📊 <b>Leverage:</b> {leverage}x
 📦 <b>Qty:</b> ~{qty_estimate:.4f} {coin}
 💵 <b>Margin:</b> ~${margin_estimate:.2f}
@@ -382,6 +486,109 @@ async def show_trade_confirmation(message: Message, scenario: dict, symbol: str,
         card,
         reply_markup=ai_scenarios_kb.get_confirm_trade_keyboard(0, risk_usd)  # scenario_index уже в state
     )
+
+
+async def show_trade_confirmation_message(
+    message: Message,
+    scenario: dict,
+    symbol: str,
+    risk_usd: float,
+    leverage: int,
+    base_risk: float = None,
+    multiplier: float = 1.0,
+    scaling_enabled: bool = False
+):
+    """
+    Отправить новое сообщение с подтверждением (для случая когда edit невозможен).
+    Используется после ввода нового SL.
+    """
+    # Получить параметры сценария
+    bias = scenario.get("bias", "long")
+    confidence = scenario.get("confidence", 0.5)
+    side_emoji = "🟢" if bias == "long" else "🔴"
+
+    entry = scenario.get("entry", {})
+    entry_min = entry.get("price_min", 0)
+    entry_max = entry.get("price_max", 0)
+    entry_price = (entry_min + entry_max) / 2
+
+    stop_loss = scenario.get("stop_loss", {})
+    stop_price = stop_loss.get("recommended", 0)
+    is_overridden = stop_loss.get("overridden", False)
+
+    targets = scenario.get("targets", [])
+
+    # Простой расчёт для preview
+    stop_distance = abs(entry_price - stop_price)
+    qty_estimate = risk_usd / stop_distance if stop_distance > 0 else 0
+    margin_estimate = (qty_estimate * entry_price) / leverage if leverage > 0 else 0
+
+    coin = symbol.replace("USDT", "")
+
+    # Формируем TP info
+    tp_info = ""
+    if targets:
+        for idx, target in enumerate(targets, 1):
+            tp_price = target.get("price", 0)
+            tp_rr = target.get("rr", 0)
+            partial_pct = target.get("partial_close_pct", 100)
+            tp_info += f"🎯 <b>TP{idx}:</b> ${tp_price:.2f} (RR {tp_rr:.1f}) - {partial_pct}%\n"
+    else:
+        tp_info = "🎯 <b>TP:</b> N/A\n"
+
+    # Формируем информацию о риске
+    if scaling_enabled and base_risk and multiplier != 1.0:
+        multiplier_pct = (multiplier - 1) * 100
+        sign = "+" if multiplier_pct >= 0 else ""
+        risk_info = (
+            f"💰 <b>Risk:</b> ${risk_usd:.2f}\n"
+            f"   <i>(${base_risk:.0f} × {multiplier:.2f}, conf {confidence*100:.0f}% → {sign}{multiplier_pct:.0f}%)</i>"
+        )
+    else:
+        risk_info = f"💰 <b>Risk:</b> ${risk_usd:.2f}"
+
+    # Индикатор override SL
+    sl_indicator = " ✏️<i>(overridden)</i>" if is_overridden else ""
+
+    card = f"""
+✅ <b>Подтверждение сделки</b>
+
+{side_emoji} <b>{symbol}</b> {bias.upper()}
+📊 <b>Confidence:</b> {confidence*100:.0f}%
+
+⚡ <b>Entry:</b> Market @ ${entry_price:.2f}
+🛑 <b>Stop:</b> ${stop_price:.2f}{sl_indicator}
+{tp_info}
+{risk_info}
+📊 <b>Leverage:</b> {leverage}x
+📦 <b>Qty:</b> ~{qty_estimate:.4f} {coin}
+💵 <b>Margin:</b> ~${margin_estimate:.2f}
+
+<i>⚠️ Проверь все параметры перед подтверждением!</i>
+"""
+
+    await message.answer(
+        card,
+        reply_markup=ai_scenarios_kb.get_confirm_trade_keyboard(0, risk_usd)
+    )
+
+
+async def check_positions_limit(bybit: BybitClient, max_positions: int) -> tuple[bool, int]:
+    """
+    Проверить лимит активных позиций.
+
+    Returns:
+        (can_open, current_count) - можно ли открыть новую позицию и текущее количество
+    """
+    try:
+        positions = await bybit.get_positions()
+        current_count = len(positions)
+        can_open = current_count < max_positions
+        return can_open, current_count
+    except Exception as e:
+        logger.error(f"Error checking positions limit: {e}")
+        # При ошибке разрешаем (fail open)
+        return True, 0
 
 
 @router.callback_query(AIScenarioStates.confirmation, F.data.startswith("ai:confirm:"))
@@ -406,6 +613,27 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         settings = await settings_storage.get_settings(user_id)
         testnet_mode = settings.testnet_mode
 
+        # === ПРОВЕРКА ЛИМИТА ПОЗИЦИЙ ===
+        bybit = BybitClient(testnet=testnet_mode)
+
+        can_open, current_count = await check_positions_limit(
+            bybit,
+            settings.max_active_positions
+        )
+
+        if not can_open:
+            await lock_manager.release_lock(user_id)
+            await callback.message.edit_text(
+                f"⚠️ <b>Достигнут лимит активных позиций!</b>\n\n"
+                f"Текущие позиции: {current_count}\n"
+                f"Лимит: {settings.max_active_positions}\n\n"
+                f"<i>Закрой существующие позиции перед открытием новых.</i>",
+                reply_markup=None
+            )
+            await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+            await state.clear()
+            return
+
         # Извлечь параметры сценария
         symbol = data.get("symbol", "BTCUSDT")
         bias = scenario.get("bias", "long")
@@ -423,8 +651,7 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         # ===== ВЫПОЛНЕНИЕ ЧЕРЕЗ TRADE BOT (не через Syntra API!) =====
         await callback.message.edit_text("⏳ <b>Выполняю сделку...</b>")
 
-        # Создать Bybit клиент
-        bybit = BybitClient(testnet=testnet_mode)
+        # Используем уже созданный bybit клиент
         risk_calc = RiskCalculator(bybit)
 
         # Получить текущую цену
@@ -799,6 +1026,159 @@ async def ai_change_symbol(callback: CallbackQuery, state: FSMContext):
     )
 
     await callback.answer()
+
+
+# ===== Override SL =====
+
+@router.callback_query(AIScenarioStates.confirmation, F.data.startswith("ai:edit_sl:"))
+async def ai_edit_sl_start(callback: CallbackQuery, state: FSMContext):
+    """Начать редактирование SL"""
+    data = await state.get_data()
+    scenario_index = int(callback.data.split(":")[2])
+    scenarios = data.get("scenarios", [])
+    scenario = scenarios[scenario_index]
+
+    # Получаем текущий SL из сценария
+    stop_loss = scenario.get("stop_loss", {})
+    current_sl = stop_loss.get("recommended", 0)
+    bias = scenario.get("bias", "long")
+
+    await state.set_state(AIScenarioStates.editing_sl)
+    await state.update_data(original_sl=current_sl)
+
+    sl_direction = "ниже entry" if bias == "long" else "выше entry"
+
+    await callback.message.edit_text(
+        f"✏️ <b>Override Stop Loss</b>\n\n"
+        f"Текущий SL от AI: ${current_sl:.2f}\n"
+        f"Направление: {bias.upper()}\n\n"
+        f"<i>Для {bias.upper()} позиции SL должен быть {sl_direction}</i>\n\n"
+        f"Введи новую цену Stop Loss (только число):\n"
+        f"Например: <code>{current_sl * 0.98:.2f}</code>",
+        reply_markup=ai_scenarios_kb.get_edit_sl_cancel_keyboard(scenario_index)
+    )
+
+    await callback.answer()
+
+
+@router.message(AIScenarioStates.editing_sl)
+async def ai_edit_sl_process(message: Message, state: FSMContext, settings_storage):
+    """Обработать введённый пользователем SL"""
+    user_id = message.from_user.id
+
+    try:
+        # Парсим цену
+        new_sl_text = message.text.strip().replace(",", ".").replace("$", "")
+        new_sl = float(new_sl_text)
+
+        if new_sl <= 0:
+            raise ValueError("SL must be positive")
+
+        # Получаем данные
+        data = await state.get_data()
+        scenarios = data.get("scenarios", [])
+        scenario_index = data.get("selected_scenario_index", 0)
+        scenario = scenarios[scenario_index]
+
+        # Валидация: SL должен быть в правильном направлении
+        entry = scenario.get("entry", {})
+        entry_min = entry.get("price_min", 0)
+        entry_max = entry.get("price_max", 0)
+        entry_price = (entry_min + entry_max) / 2
+        bias = scenario.get("bias", "long")
+
+        if bias == "long" and new_sl >= entry_price:
+            await message.answer(
+                f"⚠️ <b>Неверный SL для LONG!</b>\n\n"
+                f"SL (${new_sl:.2f}) должен быть ниже entry (${entry_price:.2f})\n\n"
+                f"Введи корректную цену:"
+            )
+            return
+
+        if bias == "short" and new_sl <= entry_price:
+            await message.answer(
+                f"⚠️ <b>Неверный SL для SHORT!</b>\n\n"
+                f"SL (${new_sl:.2f}) должен быть выше entry (${entry_price:.2f})\n\n"
+                f"Введи корректную цену:"
+            )
+            return
+
+        # Обновляем SL в сценарии
+        scenario["stop_loss"]["recommended"] = new_sl
+        scenario["stop_loss"]["overridden"] = True
+
+        # Пересчитываем риск и показываем подтверждение
+        settings = await settings_storage.get_settings(user_id)
+        risk_usd = data.get("risk_usd", 10)
+        leverage = data.get("leverage", 5)
+        base_risk = data.get("base_risk_usd", risk_usd)
+        multiplier = data.get("risk_multiplier", 1.0)
+
+        await state.update_data(
+            scenarios=scenarios,
+            custom_sl=new_sl
+        )
+        await state.set_state(AIScenarioStates.confirmation)
+
+        # Показываем обновлённое подтверждение
+        symbol = data.get("symbol", "BTCUSDT")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        # Отправляем новую карточку подтверждения
+        await show_trade_confirmation_message(
+            message,
+            scenario,
+            symbol,
+            risk_usd,
+            leverage,
+            base_risk=base_risk,
+            multiplier=multiplier,
+            scaling_enabled=settings.confidence_risk_scaling
+        )
+
+        logger.info(f"User {user_id} overridden SL to ${new_sl:.2f}")
+
+    except ValueError:
+        await message.answer(
+            "⚠️ Неверный формат цены!\n\n"
+            "Введи число, например: <code>95000.50</code>"
+        )
+
+
+@router.callback_query(AIScenarioStates.editing_sl, F.data.startswith("ai:cancel_edit:"))
+async def ai_edit_sl_cancel(callback: CallbackQuery, state: FSMContext, settings_storage):
+    """Отменить редактирование SL и вернуться к подтверждению"""
+    data = await state.get_data()
+    scenario_index = int(callback.data.split(":")[2])
+    scenarios = data.get("scenarios", [])
+    scenario = scenarios[scenario_index]
+
+    user_id = callback.from_user.id
+    settings = await settings_storage.get_settings(user_id)
+
+    risk_usd = data.get("risk_usd", 10)
+    leverage = data.get("leverage", 5)
+    base_risk = data.get("base_risk_usd", risk_usd)
+    multiplier = data.get("risk_multiplier", 1.0)
+    symbol = data.get("symbol", "BTCUSDT")
+
+    await state.set_state(AIScenarioStates.confirmation)
+
+    await show_trade_confirmation(
+        callback.message,
+        scenario,
+        symbol,
+        risk_usd,
+        leverage,
+        base_risk=base_risk,
+        multiplier=multiplier,
+        scaling_enabled=settings.confidence_risk_scaling
+    )
+
+    await callback.answer("Редактирование отменено")
 
 
 @router.callback_query(AIScenarioStates.viewing_scenarios, F.data == "ai:refresh")

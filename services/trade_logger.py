@@ -392,6 +392,41 @@ class TradeLogger:
             if trade.outcome == 'win':
                 symbols_stats[symbol]['wins'] += 1
 
+        # === EXPECTANCY CALCULATION ===
+        # Expectancy = (Win Rate * Avg Win) - (Loss Rate * Avg Loss)
+        # Показывает ожидаемую прибыль на 1 сделку
+        win_rate_decimal = len(wins) / total_trades if total_trades > 0 else 0
+        loss_rate_decimal = len(losses) / total_trades if total_trades > 0 else 0
+
+        expectancy = (win_rate_decimal * avg_win) - (loss_rate_decimal * abs(avg_loss))
+
+        # Expectancy в R (относительно среднего риска)
+        avg_risk = sum(t.risk_usd for t in trades if t.risk_usd) / total_trades if total_trades > 0 else 1
+        expectancy_r = expectancy / avg_risk if avg_risk > 0 else 0
+
+        # Profit Factor = Gross Profit / Gross Loss
+        gross_profit = sum(t.pnl_usd for t in wins if t.pnl_usd and t.pnl_usd > 0)
+        gross_loss = abs(sum(t.pnl_usd for t in losses if t.pnl_usd and t.pnl_usd < 0))
+        profit_factor = gross_profit / gross_loss if gross_loss > 0 else float('inf') if gross_profit > 0 else 0
+
+        # Win/Loss streaks
+        current_streak = 0
+        max_win_streak = 0
+        max_loss_streak = 0
+        for trade in trades:
+            if trade.outcome == 'win':
+                if current_streak >= 0:
+                    current_streak += 1
+                    max_win_streak = max(max_win_streak, current_streak)
+                else:
+                    current_streak = 1
+            elif trade.outcome == 'loss':
+                if current_streak <= 0:
+                    current_streak -= 1
+                    max_loss_streak = max(max_loss_streak, abs(current_streak))
+                else:
+                    current_streak = -1
+
         return {
             'total_trades': total_trades,
             'winrate': winrate,
@@ -403,7 +438,16 @@ class TradeLogger:
             'worst_trade': worst_trade,
             'long_trades': long_trades,
             'short_trades': short_trades,
-            'symbols': symbols_stats
+            'symbols': symbols_stats,
+            # === NEW: Advanced Analytics ===
+            'expectancy': expectancy,  # $ per trade
+            'expectancy_r': expectancy_r,  # R per trade
+            'profit_factor': profit_factor,
+            'avg_risk': avg_risk,
+            'win_count': len(wins),
+            'loss_count': len(losses),
+            'max_win_streak': max_win_streak,
+            'max_loss_streak': max_loss_streak
         }
 
 

@@ -162,6 +162,21 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
         bybit = BybitClient(testnet=testnet_mode)
         risk_calc = RiskCalculator(bybit)
 
+        # ===== 3.5. Проверка лимита позиций =====
+        positions = await bybit.get_positions()
+        current_positions_count = len(positions)
+
+        if current_positions_count >= settings.max_active_positions:
+            await callback.message.edit_text(
+                f"⚠️ <b>Достигнут лимит активных позиций!</b>\n\n"
+                f"Текущие позиции: {current_positions_count}\n"
+                f"Лимит: {settings.max_active_positions}\n\n"
+                f"<i>Закрой существующие позиции перед открытием новых.</i>",
+                reply_markup=None
+            )
+            await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+            return
+
         # ===== 4. Получить текущую цену для Market =====
         if entry_type == "Market":
             ticker = await bybit.get_tickers(symbol)

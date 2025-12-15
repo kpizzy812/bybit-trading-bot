@@ -10,7 +10,8 @@ class AIScenarioStates(StatesGroup):
     2. Просмотр сценариев от Syntra AI
     3. Выбор сценария
     4. Выбор риска ($5, $10, $20, $50, custom)
-    5. Подтверждение и execute
+    5. Опциональное редактирование SL/TP
+    6. Подтверждение и execute
     """
 
     choosing_symbol = State()       # Шаг 1: Выбор символа
@@ -18,6 +19,7 @@ class AIScenarioStates(StatesGroup):
     viewing_scenarios = State()     # Шаг 3: Просмотр сценариев
     viewing_detail = State()        # Шаг 4: Детальный просмотр сценария
     entering_custom_risk = State()  # Шаг 5: Ввод custom риска
+    editing_sl = State()            # Шаг 5b: Override SL (кастомный стоп)
     confirmation = State()          # Шаг 6: Подтверждение
 
 

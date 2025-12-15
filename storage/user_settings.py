@@ -36,6 +36,16 @@ class UserSettings:
     # Mode
     testnet_mode: bool = config.DEFAULT_TESTNET_MODE
 
+    # === Risk Management ===
+    # Auto breakeven после первого TP
+    auto_breakeven_enabled: bool = config.AUTO_BREAKEVEN_ENABLED
+
+    # Максимум активных позиций одновременно
+    max_active_positions: int = config.MAX_ACTIVE_POSITIONS
+
+    # Масштабирование риска от confidence AI
+    confidence_risk_scaling: bool = config.CONFIDENCE_RISK_SCALING_ENABLED
+
     def to_dict(self) -> Dict:
         return asdict(self)
 

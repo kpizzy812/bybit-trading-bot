@@ -6,14 +6,20 @@ Position Monitor - мониторинг позиций и уведомления
 - Позиция закрывается по Take Profit
 - Позиция закрывается частично (Ladder TP)
 - Позиция закрывается вручную или по ликвидации
+
+Также интегрируется с BreakevenManager для автоматического
+переноса SL на entry после первого TP.
 """
 import asyncio
 import logging
-from typing import Dict, Optional, Set
+from typing import Dict, Optional, Set, TYPE_CHECKING
 from datetime import datetime
 from aiogram import Bot
 from services.bybit import BybitClient
 from services.trade_logger import TradeLogger
+
+if TYPE_CHECKING:
+    from services.breakeven_manager import BreakevenManager
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +59,14 @@ class PositionMonitor:
         bot: Bot,
         trade_logger: TradeLogger,
         check_interval: int = 15,  # Интервал проверки в секундах
-        testnet: bool = False
+        testnet: bool = False,
+        breakeven_manager: Optional['BreakevenManager'] = None
     ):
         self.bot = bot
         self.trade_logger = trade_logger
         self.check_interval = check_interval
         self.testnet = testnet
+        self.breakeven_manager = breakeven_manager
 
         # Создаем клиент один раз
         self.client = BybitClient(testnet=testnet)
@@ -72,6 +80,11 @@ class PositionMonitor:
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
+
+    def set_breakeven_manager(self, breakeven_manager: 'BreakevenManager'):
+        """Установить BreakevenManager после инициализации"""
+        self.breakeven_manager = breakeven_manager
+        logger.info("BreakevenManager connected to PositionMonitor")
 
     def register_user(self, user_id: int):
         """Зарегистрировать пользователя для мониторинга"""
@@ -198,6 +211,10 @@ class PositionMonitor:
         except Exception as e:
             logger.error(f"Failed to log closed position: {e}")
 
+        # Очищаем статус breakeven для этой позиции
+        if self.breakeven_manager:
+            self.breakeven_manager.clear_breakeven_status(snapshot.symbol, snapshot.side)
+
         # Отправляем уведомление
         await self._send_close_notification(
             user_id=user_id,
@@ -240,6 +257,22 @@ class PositionMonitor:
             )
         except Exception as e:
             logger.error(f"Failed to log partial close: {e}")
+
+        # === AUTO BREAKEVEN ===
+        # Если это partial close в плюсе, переносим SL на breakeven
+        if self.breakeven_manager and partial_pnl > 0:
+            try:
+                await self.breakeven_manager.handle_partial_close(
+                    user_id=user_id,
+                    symbol=old_snapshot.symbol,
+                    side=old_snapshot.side,
+                    entry_price=old_snapshot.entry_price,
+                    old_size=old_snapshot.size,
+                    new_size=new_snapshot.size,
+                    closed_pct=percent_closed
+                )
+            except Exception as be_error:
+                logger.error(f"Breakeven error: {be_error}")
 
         # Отправляем уведомление
         await self._send_close_notification(
@@ -376,12 +409,14 @@ def create_position_monitor(
     bot: Bot,
     trade_logger: TradeLogger,
     testnet: bool = False,
-    check_interval: int = 15
+    check_interval: int = 15,
+    breakeven_manager: Optional['BreakevenManager'] = None
 ) -> PositionMonitor:
     """Создать экземпляр PositionMonitor"""
     return PositionMonitor(
         bot=bot,
         trade_logger=trade_logger,
         check_interval=check_interval,
-        testnet=testnet
+        testnet=testnet,
+        breakeven_manager=breakeven_manager
     )

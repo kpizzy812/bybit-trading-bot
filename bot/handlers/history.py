@@ -224,21 +224,41 @@ async def show_statistics(callback: CallbackQuery, trade_logger, settings_storag
         long_trades = stats['long_trades']
         short_trades = stats['short_trades']
 
+        # New metrics
+        expectancy = stats.get('expectancy', 0)
+        expectancy_r = stats.get('expectancy_r', 0)
+        profit_factor = stats.get('profit_factor', 0)
+        win_count = stats.get('win_count', 0)
+        loss_count = stats.get('loss_count', 0)
+        max_win_streak = stats.get('max_win_streak', 0)
+        max_loss_streak = stats.get('max_loss_streak', 0)
+
+        # Форматируем profit factor
+        pf_str = f"{profit_factor:.2f}" if profit_factor != float('inf') else "∞"
+
+        # Эмодзи для expectancy
+        exp_emoji = "📈" if expectancy > 0 else "📉" if expectancy < 0 else "➖"
+
         text = f"""
 📊 <b>Статистика (последние {total} сделок)</b>
 
-<b>Общие показатели:</b>
-✅ Винрейт: {winrate:.1f}%
-💰 Общий PnL: ${total_pnl:+.2f}
-📈 Средний RR: {avg_rr:.2f}
+<b>🎯 Ключевые метрики:</b>
+{exp_emoji} <b>Expectancy:</b> ${expectancy:+.2f}/trade ({expectancy_r:+.2f}R)
+💹 <b>Profit Factor:</b> {pf_str}
+✅ <b>Winrate:</b> {winrate:.1f}% ({win_count}W/{loss_count}L)
 
-<b>PnL:</b>
-💰 Средний профит: ${avg_win:.2f}
-📉 Средний убыток: ${avg_loss:.2f}
-🏆 Лучшая сделка: ${best:+.2f}
-💔 Худшая сделка: ${worst:+.2f}
+<b>💰 PnL:</b>
+Общий: ${total_pnl:+.2f}
+Avg Win: ${avg_win:.2f} | Avg Loss: ${avg_loss:.2f}
+Best: ${best:+.2f} | Worst: ${worst:+.2f}
 
-<b>Направления:</b>
+<b>📈 Risk/Reward:</b>
+Средний RR: {avg_rr:.2f}
+
+<b>🔥 Streaks:</b>
+Win streak: {max_win_streak} | Loss streak: {max_loss_streak}
+
+<b>📊 Направления:</b>
 🟢 Long: {long_trades} ({long_trades/total*100:.1f}%)
 🔴 Short: {short_trades} ({short_trades/total*100:.1f}%)
 """
