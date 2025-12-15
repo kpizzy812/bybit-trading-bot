@@ -4,6 +4,7 @@ Syntra AI Client
 Клиент для интеграции с аналитической системой Syntra AI.
 Получает торговые сценарии с конкретными уровнями входа, стопа и целей.
 """
+import asyncio
 import aiohttp
 from typing import Dict, List, Optional, Any
 from loguru import logger
@@ -117,13 +118,17 @@ class SyntraClient:
 
                     return scenarios
 
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout after {self.timeout}s waiting for Syntra AI response")
+            raise SyntraAPIError(f"Request timeout ({self.timeout}s) - Syntra AI is too slow")
+
         except aiohttp.ClientError as e:
             logger.error(f"Network error: {e}")
             raise SyntraAPIError(f"Failed to connect to Syntra AI: {e}")
 
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            raise SyntraAPIError(f"Unexpected error: {e}")
+            logger.error(f"Unexpected error ({type(e).__name__}): {e}", exc_info=True)
+            raise SyntraAPIError(f"Unexpected error ({type(e).__name__}): {e}")
 
     async def calculate_position_size(
         self,
@@ -222,13 +227,17 @@ class SyntraClient:
 
                     return data
 
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout after {self.timeout}s waiting for Syntra AI response")
+            raise SyntraAPIError(f"Request timeout ({self.timeout}s) - Syntra AI is too slow")
+
         except aiohttp.ClientError as e:
             logger.error(f"Network error: {e}")
             raise SyntraAPIError(f"Failed to connect to Syntra AI: {e}")
 
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-            raise SyntraAPIError(f"Unexpected error: {e}")
+            logger.error(f"Unexpected error ({type(e).__name__}): {e}", exc_info=True)
+            raise SyntraAPIError(f"Unexpected error ({type(e).__name__}): {e}")
 
     async def health_check(self) -> bool:
         """
