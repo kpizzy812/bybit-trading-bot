@@ -17,6 +17,7 @@ from bot.keyboards.main_menu import get_main_menu
 from services.syntra_client import get_syntra_client, SyntraAPIError
 from services.bybit import BybitClient
 from services.risk_calculator import RiskCalculator
+from utils.validators import round_qty, round_price
 
 router = Router()
 
@@ -154,7 +155,6 @@ async def show_scenarios_list(message: Message, scenarios: list, symbol: str, ti
         entry = scenario.get("entry", {})
         entry_min = entry.get("price_min", 0)
         entry_max = entry.get("price_max", 0)
-        entry_avg = (entry_min + entry_max) / 2 if entry_min and entry_max else 0
 
         # Stop Loss
         stop_loss = scenario.get("stop_loss", {})
@@ -163,30 +163,22 @@ async def show_scenarios_list(message: Message, scenarios: list, symbol: str, ti
         # Все TP targets (показываем все 3)
         targets = scenario.get("targets", [])
 
-        # Формируем строку с TP
-        tp_text = ""
+        # Формируем текст сценария
+        text += f"{i}. {bias_emoji} <b>{name}</b> ({confidence:.0f}%)\n"
+        text += f"   Entry: ${entry_min:.2f} - ${entry_max:.2f}\n"
+        text += f"   Stop: ${sl_price:.2f}\n"
+
+        # Показываем каждый TP с его RR и % закрытия
         if targets:
-            # Показываем до 3 TP
             for idx, target in enumerate(targets[:3], 1):
                 tp_price = target.get("price", 0)
                 tp_rr = target.get("rr", 0)
                 partial_pct = target.get("partial_close_pct", 100)
-
-                if idx == 1:
-                    tp_text += f"TP{idx}: ${tp_price:.2f}"
-                else:
-                    tp_text += f" | TP{idx}: ${tp_price:.2f}"
-
-            # Берём лучший RR (обычно TP3)
-            best_rr = max([t.get("rr", 0) for t in targets], default=0)
+                text += f"   TP{idx}: ${tp_price:.2f} (RR {tp_rr:.1f}x) - {partial_pct}%\n"
         else:
-            tp_text = "N/A"
-            best_rr = 0
+            text += f"   TP: N/A\n"
 
-        text += f"{i}. {bias_emoji} <b>{name}</b> ({confidence:.0f}%)\n"
-        text += f"   Entry: ${entry_avg:.2f} | Stop: ${sl_price:.2f}\n"
-        text += f"   {tp_text}\n"
-        text += f"   Best RR: {best_rr:.1f}x\n\n"
+        text += "\n"  # Пустая строка между сценариями
 
     text += "📌 Выбери сценарий для деталей:"
 
@@ -426,7 +418,45 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         # Получить текущую mark price
         ticker = await bybit.get_tickers(symbol)
         mark_price = float(ticker.get('markPrice'))
+
+        # ===== ВАЛИДАЦИЯ ЗОНЫ ВХОДА =====
+        # Проверяем что текущая цена в зоне или близко к ней
+        zone_size = entry_max - entry_min
+        zone_tolerance = zone_size * 0.15  # 15% от размера зоны
+
+        # Проверка для Long
+        if bias == "long":
+            # Цена должна быть В зоне или чуть выше (не более +15% от размера зоны)
+            if mark_price > entry_max + zone_tolerance:
+                await callback.message.edit_text(
+                    f"⚠️ <b>Цена слишком высока для входа!</b>\n\n"
+                    f"💰 Текущая цена: <b>${mark_price:.2f}</b>\n"
+                    f"📊 Зона входа: ${entry_min:.2f} - ${entry_max:.2f}\n\n"
+                    f"<i>Цена выше рекомендованной зоны.\n"
+                    f"Подожди коррекции или выбери другой сценарий.</i>",
+                    reply_markup=None
+                )
+                await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+                return
+
+        # Проверка для Short
+        else:
+            # Цена должна быть В зоне или чуть ниже (не более -15% от размера зоны)
+            if mark_price < entry_min - zone_tolerance:
+                await callback.message.edit_text(
+                    f"⚠️ <b>Цена слишком низка для входа!</b>\n\n"
+                    f"💰 Текущая цена: <b>${mark_price:.2f}</b>\n"
+                    f"📊 Зона входа: ${entry_min:.2f} - ${entry_max:.2f}\n\n"
+                    f"<i>Цена ниже рекомендованной зоны.\n"
+                    f"Подожди отскока или выбери другой сценарий.</i>",
+                    reply_markup=None
+                )
+                await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+                return
+
+        # Цена ОК - используем текущую mark_price для входа
         entry_price = mark_price
+        logger.info(f"Entry zone validation passed: ${mark_price:.2f} in zone ${entry_min:.2f}-${entry_max:.2f}")
 
         # Рассчитать позицию
         position_calc = await risk_calc.calculate_position(
@@ -490,15 +520,48 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
             sl_trigger_by="MarkPrice"
         )
 
-        # Установить Take Profit (первый target)
+        # ===== УСТАНОВИТЬ LADDER TAKE PROFIT =====
         targets = scenario.get("targets", [])
         if targets:
-            tp_price = targets[0].get("price", 0)
-            await bybit.set_trading_stop(
+            # Получить instrument info для округления
+            instrument_info = position_calc.get('instrument_info', {})
+            tick_size = instrument_info.get('tickSize', '0.01')
+            qty_step = instrument_info.get('qtyStep', '0.001')
+
+            # Подготовить уровни TP
+            tp_levels = []
+            total_pct = 0
+
+            for target in targets:
+                tp_price = target.get("price", 0)
+                partial_pct = target.get("partial_close_pct", 0)
+
+                # Рассчитать qty для этого уровня
+                tp_qty_raw = (actual_qty * partial_pct) / 100
+                tp_qty = round_qty(tp_qty_raw, qty_step, round_down=True)
+
+                # Округлить цену
+                tp_price_str = round_price(tp_price, tick_size)
+
+                tp_levels.append({
+                    'price': tp_price_str,
+                    'qty': tp_qty
+                })
+
+                total_pct += partial_pct
+
+            # Валидация: сумма % должна быть ~100
+            if abs(total_pct - 100) > 1:  # Допуск 1%
+                logger.warning(f"TP percentages sum to {total_pct}%, expected 100%")
+
+            # Разместить ladder TP ордера
+            await bybit.place_ladder_tp(
                 symbol=symbol,
-                take_profit=str(tp_price),
-                tp_trigger_by="MarkPrice"
+                position_side=side,
+                tp_levels=tp_levels,
+                client_order_id_prefix=trade_id
             )
+            logger.info(f"Ladder TP set: {len(tp_levels)} levels")
 
         # Success!
         actual_risk = abs(actual_entry_price - stop_price) * actual_qty
@@ -506,6 +569,7 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         # Определяем emoji для side
         side_emoji = "🟢" if bias == "long" else "🔴"
 
+        # Формируем success message
         success_text = f"""
 ✅ <b>Сделка открыта!</b>
 
@@ -513,13 +577,23 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 
 ⚡ <b>Entry:</b> ${actual_entry_price:.2f} (filled)
 🛑 <b>Stop:</b> ${stop_price:.2f}
-🎯 <b>TP:</b> ${tp_price if 'tp_price' in locals() else 0:.2f}
+"""
 
+        # Добавляем информацию о всех TP
+        if targets:
+            for idx, target in enumerate(targets, 1):
+                tp_price = target.get("price", 0)
+                partial_pct = target.get("partial_close_pct", 0)
+                success_text += f"🎯 <b>TP{idx}:</b> ${tp_price:.2f} ({partial_pct}%)\n"
+        else:
+            success_text += "🎯 <b>TP:</b> N/A\n"
+
+        success_text += f"""
 💰 <b>Risk:</b> ${actual_risk:.2f}
 📊 <b>Leverage:</b> {leverage}x
 📦 <b>Qty:</b> {actual_qty}
 
-<i>✅ Позиция открыта на основе AI сценария</i>
+<i>✅ Ladder TP: {len(targets) if targets else 0} уровня | AI сценарий</i>
 """
 
         await callback.message.edit_text(success_text, reply_markup=None)
