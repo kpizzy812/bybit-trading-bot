@@ -30,6 +30,8 @@ async def open_trade_handler(message: Message, state: FSMContext):
 @router.message(F.text == "📊 Позиции")
 async def positions_handler(message: Message, settings_storage, lock_manager):
     """Показать открытые позиции"""
+    from bot.keyboards.positions_kb import get_positions_list_kb
+
     # Получаем настройки пользователя
     user_settings = await settings_storage.get_settings(message.from_user.id)
     testnet = user_settings.testnet_mode
@@ -78,10 +80,10 @@ async def positions_handler(message: Message, settings_storage, lock_manager):
                 f"  Liq: ${liq_price}\n\n"
             )
 
-        text += "\n💡 <i>Используй кнопки ниже для управления позициями</i>"
+        text += "\n💡 <i>Нажми на позицию для управления</i>"
 
-        # TODO: Добавить inline кнопки для управления каждой позицией
-        await message.answer(text, reply_markup=get_main_menu())
+        # Inline кнопки для управления позициями
+        await message.answer(text, reply_markup=get_positions_list_kb(positions))
 
     except Exception as e:
         await message.answer(
@@ -93,6 +95,8 @@ async def positions_handler(message: Message, settings_storage, lock_manager):
 @router.message(F.text == "⚙️ Настройки")
 async def settings_handler(message: Message, settings_storage):
     """Показать меню настроек"""
+    from bot.keyboards.settings_kb import get_settings_menu_kb
+
     user_settings = await settings_storage.get_settings(message.from_user.id)
 
     # Формируем текст с текущими настройками
@@ -107,25 +111,25 @@ async def settings_handler(message: Message, settings_storage):
     shorts_text = "✅ Включены" if shorts_enabled else "❌ Выключены"
 
     text = f"""
-⚙️ <b>Текущие настройки:</b>
+⚙️ <b>Настройки бота</b>
 
-🌐 <b>Режим:</b> {mode_text}
-💰 <b>Дефолтный риск:</b> ${default_risk}
-📊 <b>Дефолтное плечо:</b> {default_leverage}x
-🔀 <b>Режим маржи:</b> {default_margin_mode}
-🔴 <b>Шорты:</b> {shorts_text}
-🎯 <b>TP режим:</b> {default_tp_mode}
+<b>Текущие параметры:</b>
+
+🌐 Режим: {mode_text}
+💰 Дефолтный риск: ${default_risk}
+📊 Дефолтное плечо: {default_leverage}x
+🔀 Режим маржи: {default_margin_mode}
+🔴 Шорты: {shorts_text}
+🎯 TP режим: {default_tp_mode}
 
 <b>Лимиты безопасности:</b>
-🛡 Макс. риск на сделку: ${config.MAX_RISK_PER_TRADE}
-🛡 Макс. маржа на сделку: ${config.MAX_MARGIN_PER_TRADE}
-🛡 Макс. плечо: {config.MAX_LEVERAGE}x
+🛡 Макс. риск на сделку: ${user_settings.max_risk_per_trade}
+🛡 Макс. маржа на сделку: ${user_settings.max_margin_per_trade}
 
-💡 <i>Используй inline кнопки для изменения настроек</i>
+💡 Выбери категорию для изменения:
 """
 
-    # TODO: Добавить inline кнопки для изменения каждой настройки
-    await message.answer(text, reply_markup=get_main_menu())
+    await message.answer(text.strip(), reply_markup=get_settings_menu_kb())
 
 
 @router.message(F.text == "🧾 История")

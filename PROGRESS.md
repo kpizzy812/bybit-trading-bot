@@ -508,12 +508,60 @@ futures-bot/
   - Success message с реальными данными
   - Полный error handling (BybitError, TimeoutError, RiskCalculationError)
 
-### Следующие шаги:
-- [ ] **Тестирование Trade Execution на Testnet** (КРИТИЧНО!)
-- [ ] Добавить Position Monitoring с real-time updates
-- [ ] Реализовать Settings management (inline кнопки)
-- [ ] Добавить Trade History и Statistics
-- [ ] AI сценарии integration (опционально)
+### Session 2 (2025-12-15) - Position Management & Settings
+- [x] **Позиции (100% готово)**:
+  - Добавлены методы partial_close() и move_sl() в BybitClient
+  - Создан bot/keyboards/positions_kb.py с inline клавиатурами
+  - Создан bot/handlers/positions.py с полным функционалом:
+    - Список позиций с PnL и ROE%
+    - Детальный просмотр позиции (entry, SL, TP, liq price)
+    - Partial Close (25%, 50%, 75%)
+    - Move SL с валидацией
+    - Close Market с подтверждением
+    - Panic Close All с подтверждением
+    - Auto-refresh кнопка
+  - Обновлён menu.py для использования inline клавиатур
+
+- [x] **Настройки (100% готово)**:
+  - Создан bot/keyboards/settings_kb.py с inline клавиатурами
+  - Создан bot/handlers/settings.py с полным функционалом:
+    - Изменение default_risk (пресеты: $5, $10, $15, $20)
+    - Изменение default_leverage (пресеты: 2x, 3x, 5x, 10x)
+    - Изменение TP mode (single, ladder, RR)
+    - Включение/выключение шортов
+    - Изменение safety limits (max_risk, max_margin)
+    - Все изменения сохраняются в settings_storage
+  - Обновлён menu.py для использования inline клавиатур
+
+- [x] **Trade Logger (50% готово)**:
+  - Создан services/trade_logger.py для хранения истории
+  - TradeRecord dataclass для записи сделок
+  - TradeLogger с Redis/in-memory поддержкой
+  - Методы: log_trade(), get_trades(), get_statistics()
+  - Расчёт статистики: winrate, avg RR, total PnL, best/worst trade
+
+### Что ещё нужно реализовать:
+- [ ] **История (50% осталось)**:
+  - Создать bot/handlers/history.py для показа истории
+  - Интегрировать trade_logger в Trade Wizard (логировать сделки при execution)
+  - Показ последних N сделок с фильтрами (по символу, Long/Short)
+  - Статистика dashboard (winrate, PnL, по символам)
+
+- [ ] **Регистрация хендлеров**:
+  - Зарегистрировать positions router в main.py
+  - Зарегистрировать settings router в main.py
+  - Зарегистрировать history router в main.py (когда будет готов)
+
+- [ ] **Тестирование на Testnet** (КРИТИЧНО!)
+
+### Следующие шаги для новой сессии:
+1. Завершить History implementation:
+   - Создать history.py хендлер
+   - Интегрировать trade_logger в confirmation.py (Trade Wizard)
+   - Добавить логирование при закрытии позиций
+2. Зарегистрировать все новые роутеры в main.py
+3. Протестировать весь функционал на Testnet
+4. AI сценарии integration (опционально)
 
 ---
 

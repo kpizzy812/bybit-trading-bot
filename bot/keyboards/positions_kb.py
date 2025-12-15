@@ -1,0 +1,145 @@
+"""
+Inline клавиатуры для управления позициями
+"""
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+
+def get_positions_list_kb(positions: list) -> InlineKeyboardMarkup:
+    """
+    Клавиатура со списком позиций + управляющие кнопки
+
+    Args:
+        positions: Список позиций от Bybit API
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Кнопка для каждой позиции
+    for pos in positions:
+        symbol = pos.get('symbol')
+        side = pos.get('side')  # "Buy" or "Sell"
+        unrealized_pnl = float(pos.get('unrealisedPnl', 0))
+
+        # Эмодзи
+        side_emoji = "🟢" if side == "Buy" else "🔴"
+        pnl_emoji = "💰" if unrealized_pnl >= 0 else "📉"
+
+        # Текст кнопки
+        button_text = f"{side_emoji} {symbol} | {pnl_emoji} ${unrealized_pnl:+.2f}"
+
+        # Callback data: pos_detail:{symbol}
+        builder.button(
+            text=button_text,
+            callback_data=f"pos_detail:{symbol}"
+        )
+
+    # По одной кнопке на строку
+    builder.adjust(1)
+
+    # Управляющие кнопки (в одной строке)
+    builder.row(
+        InlineKeyboardButton(text="🔄 Обновить", callback_data="pos_refresh"),
+        InlineKeyboardButton(text="🧯 Закрыть всё", callback_data="pos_panic_close_all")
+    )
+
+    return builder.as_markup()
+
+
+def get_position_detail_kb(symbol: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура для управления конкретной позицией
+
+    Args:
+        symbol: Торговая пара (например, SOLUSDT)
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Управление позицией
+    builder.row(
+        InlineKeyboardButton(text="🧷 Move SL", callback_data=f"pos_move_sl:{symbol}"),
+        InlineKeyboardButton(text="🎯 Modify TP", callback_data=f"pos_modify_tp:{symbol}")
+    )
+
+    # Partial Close
+    builder.row(
+        InlineKeyboardButton(text="25%", callback_data=f"pos_partial:{symbol}:25"),
+        InlineKeyboardButton(text="50%", callback_data=f"pos_partial:{symbol}:50"),
+        InlineKeyboardButton(text="75%", callback_data=f"pos_partial:{symbol}:75")
+    )
+
+    # Close Market
+    builder.row(
+        InlineKeyboardButton(text="❌ Close Market", callback_data=f"pos_close:{symbol}")
+    )
+
+    # Назад
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="pos_back_to_list")
+    )
+
+    return builder.as_markup()
+
+
+def get_move_sl_confirmation_kb(symbol: str, new_sl: str) -> InlineKeyboardMarkup:
+    """
+    Подтверждение перемещения Stop Loss
+
+    Args:
+        symbol: Торговая пара
+        new_sl: Новая цена SL
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    builder.row(
+        InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"pos_sl_confirm:{symbol}:{new_sl}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"pos_detail:{symbol}")
+    )
+
+    return builder.as_markup()
+
+
+def get_close_confirmation_kb(symbol: str, percent: int = 100) -> InlineKeyboardMarkup:
+    """
+    Подтверждение закрытия позиции
+
+    Args:
+        symbol: Торговая пара
+        percent: Процент для закрытия (100 = полное закрытие)
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    builder.row(
+        InlineKeyboardButton(text="✅ Да, закрыть", callback_data=f"pos_close_confirm:{symbol}:{percent}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"pos_detail:{symbol}")
+    )
+
+    return builder.as_markup()
+
+
+def get_panic_close_all_confirmation_kb() -> InlineKeyboardMarkup:
+    """
+    Подтверждение Panic Close All (закрыть все позиции)
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    builder.row(
+        InlineKeyboardButton(text="🧯 Да, закрыть ВСЁ!", callback_data="pos_panic_confirm"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="pos_back_to_list")
+    )
+
+    return builder.as_markup()
