@@ -13,6 +13,7 @@ from bot.handlers import trade_wizard, ai_scenarios
 from bot.middlewares.owner_check import OwnerCheckMiddleware
 from storage.user_settings import create_storage_instances
 from services.trade_logger import create_trade_logger
+from services.position_monitor import create_position_monitor
 
 
 class InterceptHandler(logging.Handler):
@@ -86,11 +87,29 @@ async def main():
     trade_logger = create_trade_logger()
     await trade_logger.connect()
 
+    # Инициализация position monitor
+    logger.info("Initializing position monitor...")
+    position_monitor = create_position_monitor(
+        bot=bot,
+        trade_logger=trade_logger,
+        testnet=config.DEFAULT_TESTNET_MODE,
+        check_interval=config.POSITION_MONITOR_INTERVAL
+    )
+
+    # Автоматически регистрируем owner для мониторинга
+    if config.OWNER_TELEGRAM_ID > 0:
+        position_monitor.register_user(config.OWNER_TELEGRAM_ID)
+        logger.info(f"Owner {config.OWNER_TELEGRAM_ID} registered for position monitoring")
+
+    # Запускаем мониторинг
+    await position_monitor.start()
+
     # Сохраняем в workflow_data для доступа из хэндлеров
     dp.workflow_data.update({
         'settings_storage': settings_storage,
         'lock_manager': lock_manager,
-        'trade_logger': trade_logger
+        'trade_logger': trade_logger,
+        'position_monitor': position_monitor
     })
 
     # Регистрация middleware
@@ -123,6 +142,7 @@ async def main():
     finally:
         # Закрытие соединений
         logger.info("Shutting down...")
+        await position_monitor.stop()
         await settings_storage.close()
         await lock_manager.close()
         await trade_logger.close()

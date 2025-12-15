@@ -115,7 +115,7 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
     user_id = callback.from_user.id
 
     # ===== Race condition protection =====
-    if not await lock_manager.acquire_trade_lock(user_id):
+    if not await lock_manager.acquire_lock(user_id):
         await callback.answer("⏳ Trade in progress, please wait...", show_alert=True)
         return
 
@@ -513,7 +513,7 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
     finally:
-        await lock_manager.release_trade_lock(user_id)
+        await lock_manager.release_lock(user_id)
         await state.clear()
 
 

@@ -232,6 +232,14 @@ TRADE_LOCK_TTL = int(os.getenv('TRADE_LOCK_TTL', 20))
 BYBIT_CATEGORY = "linear"  # USDT perpetuals
 BYBIT_POSITION_IDX = 0  # One-Way Mode
 
+# ============================================================
+# POSITION MONITOR SETTINGS
+# ============================================================
+
+# Интервал проверки позиций (секунды)
+# Рекомендуется 15-30 сек для баланса между нагрузкой и скоростью
+POSITION_MONITOR_INTERVAL = int(os.getenv('POSITION_MONITOR_INTERVAL', 15))
+
 
 # ============================================================
 # CONFIG VALIDATION
