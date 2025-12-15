@@ -45,13 +45,22 @@ async def move_to_tp_selection(message_or_query, state: FSMContext):
         f"🎯 <b>Выбери режим Take Profit:</b>"
     )
 
-    if hasattr(message_or_query, 'edit_text'):
-        await message_or_query.edit_text(
+    from aiogram.types import Message
+
+    if isinstance(message_or_query, Message):
+        # Это сообщение пользователя - удаляем его и отправляем новое
+        try:
+            await message_or_query.delete()
+        except:
+            pass
+        sent = await message_or_query.answer(
             text,
             reply_markup=trade_kb.get_tp_mode_keyboard()
         )
+        await state.update_data(last_bot_message_id=sent.message_id)
     else:
-        await message_or_query.answer(
+        # Это CallbackQuery
+        await message_or_query.edit_text(
             text,
             reply_markup=trade_kb.get_tp_mode_keyboard()
         )

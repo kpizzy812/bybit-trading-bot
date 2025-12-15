@@ -97,13 +97,21 @@ async def move_to_confirmation(message_or_query, state: FSMContext):
 <i>⚠️ Проверь все параметры перед подтверждением!</i>
 """
 
-    if hasattr(message_or_query, 'edit_text'):
-        await message_or_query.edit_text(
+    from aiogram.types import Message
+
+    if isinstance(message_or_query, Message):
+        # Это сообщение пользователя - удаляем его и отправляем новое
+        try:
+            await message_or_query.delete()
+        except:
+            pass
+        await message_or_query.answer(
             card,
             reply_markup=trade_kb.get_confirmation_keyboard()
         )
     else:
-        await message_or_query.answer(
+        # Это CallbackQuery
+        await message_or_query.edit_text(
             card,
             reply_markup=trade_kb.get_confirmation_keyboard()
         )

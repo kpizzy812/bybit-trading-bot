@@ -43,13 +43,25 @@ async def move_to_risk_selection(message_or_query, state: FSMContext):
         f"• Position Size - размер позиции напрямую</i>"
     )
 
-    if hasattr(message_or_query, 'edit_text'):
-        await message_or_query.edit_text(
+    # Определяем, можно ли редактировать сообщение
+    # Если это Message от пользователя - отправляем новое, удаляем старое
+    # Если это Message бота (из state) или есть last_bot_message_id - редактируем
+    from aiogram.types import Message
+
+    if isinstance(message_or_query, Message):
+        # Это сообщение пользователя - удаляем его и отправляем новое
+        try:
+            await message_or_query.delete()
+        except:
+            pass
+        sent = await message_or_query.answer(
             text,
             reply_markup=trade_kb.get_risk_keyboard()
         )
+        await state.update_data(last_bot_message_id=sent.message_id)
     else:
-        await message_or_query.answer(
+        # Это CallbackQuery или другой объект с edit_text
+        await message_or_query.edit_text(
             text,
             reply_markup=trade_kb.get_risk_keyboard()
         )
@@ -160,13 +172,22 @@ async def move_to_leverage_selection(message_or_query, state: FSMContext):
         f"<i>Влияет только на маржу, не на PnL!</i>"
     )
 
-    if hasattr(message_or_query, 'edit_text'):
-        await message_or_query.edit_text(
+    from aiogram.types import Message
+
+    if isinstance(message_or_query, Message):
+        # Это сообщение пользователя - удаляем его и отправляем новое
+        try:
+            await message_or_query.delete()
+        except:
+            pass
+        sent = await message_or_query.answer(
             text,
             reply_markup=trade_kb.get_leverage_keyboard()
         )
+        await state.update_data(last_bot_message_id=sent.message_id)
     else:
-        await message_or_query.answer(
+        # Это CallbackQuery
+        await message_or_query.edit_text(
             text,
             reply_markup=trade_kb.get_leverage_keyboard()
         )
