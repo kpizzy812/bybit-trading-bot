@@ -104,6 +104,7 @@ async def main():
     logger.info("Initializing post-SL analyzer...")
     post_sl_analyzer = create_post_sl_analyzer(
         bot=bot,
+        trade_logger=trade_logger,
         testnet=config.DEFAULT_TESTNET_MODE
     )
     await post_sl_analyzer.connect()

@@ -41,6 +41,13 @@ class TradeRecord:
     status: str = "closed"  # "closed", "liquidated", "partial", "open"
     testnet: bool = False  # True если сделка на testnet
 
+    # === POST-SL ANALYSIS FIELDS ===
+    # Заполняются после срабатывания SL для анализа качества стопа
+    post_sl_price_1h: Optional[float] = None  # Цена через 1 час после SL
+    post_sl_price_4h: Optional[float] = None  # Цена через 4 часа после SL
+    sl_was_correct: Optional[bool] = None  # True если SL защитил от большего убытка
+    post_sl_move_pct: Optional[float] = None  # % движения цены после SL (+ = в сторону позиции)
+
     def to_dict(self) -> Dict:
         return asdict(self)
 
@@ -321,6 +328,57 @@ class TradeLogger:
         await self._replace_trade(user_id, target_trade)
 
         logger.info(f"Trade updated on close: {target_trade.trade_id} (PnL: ${pnl_usd:+.2f})")
+
+    async def update_post_sl_analysis(
+        self,
+        user_id: int,
+        trade_id: str,
+        price_1h: Optional[float] = None,
+        price_4h: Optional[float] = None,
+        sl_was_correct: Optional[bool] = None,
+        move_pct: Optional[float] = None,
+        testnet: Optional[bool] = None
+    ):
+        """
+        Обновить сделку с данными post-SL анализа
+
+        Args:
+            user_id: ID пользователя
+            trade_id: ID сделки
+            price_1h: Цена через 1 час после SL
+            price_4h: Цена через 4 часа после SL
+            sl_was_correct: Был ли SL правильным
+            move_pct: % движения цены после SL
+            testnet: Режим (для фильтрации)
+        """
+        # Получаем все сделки
+        all_trades = await self.get_trades(user_id, limit=100, testnet=testnet)
+
+        # Ищем сделку по trade_id
+        target_trade = None
+        for trade in all_trades:
+            if trade.trade_id == trade_id:
+                target_trade = trade
+                break
+
+        if not target_trade:
+            logger.warning(f"Trade {trade_id} not found for post-SL update")
+            return
+
+        # Обновляем post-SL поля
+        if price_1h is not None:
+            target_trade.post_sl_price_1h = price_1h
+        if price_4h is not None:
+            target_trade.post_sl_price_4h = price_4h
+        if sl_was_correct is not None:
+            target_trade.sl_was_correct = sl_was_correct
+        if move_pct is not None:
+            target_trade.post_sl_move_pct = move_pct
+
+        # Сохраняем обновлённую сделку
+        await self._replace_trade(user_id, target_trade)
+
+        logger.info(f"Post-SL analysis updated for trade {trade_id}: correct={sl_was_correct}, move={move_pct:.2f}%")
 
     async def get_statistics(self, user_id: int, limit: int = 100, testnet: Optional[bool] = None) -> Dict:
         """

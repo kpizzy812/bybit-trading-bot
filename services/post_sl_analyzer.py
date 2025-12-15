@@ -17,7 +17,11 @@ import redis.asyncio as aioredis
 
 from aiogram import Bot
 from services.bybit import BybitClient
+from typing import TYPE_CHECKING
 import config
+
+if TYPE_CHECKING:
+    from services.trade_logger import TradeLogger
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +63,12 @@ class PostSLAnalyzer:
     def __init__(
         self,
         bot: Bot,
+        trade_logger: Optional['TradeLogger'] = None,
         redis_url: Optional[str] = None,
         testnet: bool = False
     ):
         self.bot = bot
+        self.trade_logger = trade_logger  # Для сохранения в TradeRecord
         self.redis_url = redis_url
         self.redis: Optional[aioredis.Redis] = None
         self.use_redis = redis_url is not None
@@ -239,6 +245,30 @@ class PostSLAnalyzer:
 
             if is_final:
                 updated_event.analysis_complete = True
+
+                # === СОХРАНЯЕМ В TRADERECORD ДЛЯ ИСТОРИИ ===
+                if self.trade_logger:
+                    try:
+                        # Рассчитываем % движения для TradeRecord
+                        move_pct = ((current_price - updated_event.sl_price) / updated_event.sl_price) * 100
+                        # Для Long: + = хорошо (цена выросла), - = плохо
+                        # Для Short: - = хорошо (цена упала), + = плохо
+                        if updated_event.side == "Sell":
+                            move_pct = -move_pct  # Инвертируем для Short
+
+                        await self.trade_logger.update_post_sl_analysis(
+                            user_id=updated_event.user_id,
+                            trade_id=updated_event.trade_id,
+                            price_1h=updated_event.price_after_1h,
+                            price_4h=updated_event.price_after_4h,
+                            sl_was_correct=updated_event.sl_was_correct,
+                            move_pct=move_pct,
+                            testnet=self.testnet
+                        )
+                        logger.info(f"Post-SL data saved to TradeRecord: {updated_event.trade_id}")
+                    except Exception as tr_err:
+                        logger.error(f"Failed to save post-SL to TradeRecord: {tr_err}")
+
                 # Отправляем уведомление с результатами
                 await self._send_analysis_notification(updated_event)
                 # Удаляем из scheduled tasks
@@ -439,6 +469,7 @@ class PostSLAnalyzer:
 
 def create_post_sl_analyzer(
     bot: Bot,
+    trade_logger: Optional['TradeLogger'] = None,
     testnet: bool = False
 ) -> PostSLAnalyzer:
     """Создать экземпляр PostSLAnalyzer"""
@@ -449,6 +480,7 @@ def create_post_sl_analyzer(
 
     return PostSLAnalyzer(
         bot=bot,
+        trade_logger=trade_logger,
         redis_url=redis_url,
         testnet=testnet
     )

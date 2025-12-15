@@ -98,10 +98,17 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger, settings_sto
             # Индикатор режима (testnet/live)
             mode_indicator = "🧪" if getattr(trade, 'testnet', False) else "💰"
 
+            # Post-SL Analysis индикатор
+            post_sl_info = ""
+            if hasattr(trade, 'sl_was_correct') and trade.sl_was_correct is not None:
+                sl_emoji = "🛡️" if trade.sl_was_correct else "⚠️"
+                move = getattr(trade, 'post_sl_move_pct', 0) or 0
+                post_sl_info = f"\n  {sl_emoji} Post-SL: {move:+.1f}%"
+
             text += (
                 f"{outcome_emoji} {side_emoji} <b>{symbol}</b> {mode_indicator} | {timestamp}\n"
                 f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
-                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}\n\n"
+                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}{post_sl_info}\n\n"
             )
 
         # Проверяем, есть ли ещё сделки
@@ -169,10 +176,17 @@ async def show_trades_page(callback: CallbackQuery, trade_logger, settings_stora
             # Индикатор режима (testnet/live)
             mode_indicator = "🧪" if getattr(trade, 'testnet', False) else "💰"
 
+            # Post-SL Analysis индикатор
+            post_sl_info = ""
+            if hasattr(trade, 'sl_was_correct') and trade.sl_was_correct is not None:
+                sl_emoji = "🛡️" if trade.sl_was_correct else "⚠️"
+                move = getattr(trade, 'post_sl_move_pct', 0) or 0
+                post_sl_info = f"\n  {sl_emoji} Post-SL: {move:+.1f}%"
+
             text += (
                 f"{outcome_emoji} {side_emoji} <b>{symbol}</b> {mode_indicator} | {timestamp}\n"
                 f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
-                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}\n\n"
+                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}{post_sl_info}\n\n"
             )
 
         has_next = len(trades) == 20
