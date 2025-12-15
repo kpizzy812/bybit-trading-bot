@@ -9,6 +9,39 @@ logger = logging.getLogger(__name__)
 class PositionsMixin:
     """Миксин для работы с позициями"""
 
+    async def set_margin_mode(self, symbol: str, margin_mode: str, leverage: int):
+        """
+        Установить режим маржи (Isolated/Cross) и плечо для символа
+
+        Args:
+            symbol: Торговая пара (например, ETHUSDT)
+            margin_mode: "Isolated" или "Cross"
+            leverage: Кредитное плечо
+        """
+        try:
+            # Маппинг margin mode в tradeMode для Bybit API
+            trade_mode = config.MARGIN_MODE_TO_TRADEMODE.get(margin_mode, 1)  # По умолчанию Isolated
+
+            response = self.client.switch_margin_mode(
+                category=config.BYBIT_CATEGORY,
+                symbol=symbol,
+                tradeMode=trade_mode,
+                buyLeverage=str(leverage),
+                sellLeverage=str(leverage)
+            )
+            self._handle_response(response)
+            logger.info(f"Margin mode set to {margin_mode} (tradeMode={trade_mode}) with {leverage}x leverage for {symbol}")
+
+        except Exception as e:
+            error_str = str(e)
+            # Игнорируем ошибки, если режим уже установлен
+            if "110025" in error_str or "110043" in error_str or "not modified" in error_str.lower():
+                logger.info(f"Margin mode {margin_mode} and leverage {leverage}x already set for {symbol}")
+                return
+
+            logger.error(f"Error setting margin mode for {symbol}: {e}")
+            raise BybitError(f"Failed to set margin mode: {error_str}")
+
     async def set_leverage(self, symbol: str, leverage: int):
         """Установить плечо для символа"""
         try:

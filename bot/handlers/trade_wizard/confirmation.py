@@ -220,10 +220,11 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
             await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
             return
 
-        # ===== 6. Setup - установка leverage =====
-        await callback.message.edit_text(f"⚙️ <b>Установка плеча {leverage}x...</b>")
-        await bybit.set_leverage(symbol, leverage)
-        logger.info(f"Leverage set to {leverage}x")
+        # ===== 6. Setup - установка margin mode и leverage =====
+        margin_mode = settings.default_margin_mode
+        await callback.message.edit_text(f"⚙️ <b>Установка {margin_mode} margin и плеча {leverage}x...</b>")
+        await bybit.set_margin_mode(symbol, margin_mode, leverage)
+        logger.info(f"Margin mode set to {margin_mode} with {leverage}x leverage")
 
         # ===== 7. Entry Order =====
         trade_id = str(uuid.uuid4())
@@ -454,9 +455,16 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
         positions = await bybit.get_positions(symbol=symbol)
         liq_price = "N/A"
         if positions:
+            logger.info(f"Position data: {positions[0]}")
             liq_price_raw = positions[0].get('liqPrice', '')
-            if liq_price_raw and float(liq_price_raw) > 0:
-                liq_price = f"${float(liq_price_raw):.4f}"
+            logger.info(f"liqPrice from Bybit: '{liq_price_raw}' (type: {type(liq_price_raw)})")
+            if liq_price_raw and liq_price_raw != '' and liq_price_raw != '0':
+                try:
+                    liq_price_float = float(liq_price_raw)
+                    if liq_price_float > 0:
+                        liq_price = f"${liq_price_float:.4f}"
+                except (ValueError, TypeError):
+                    logger.warning(f"Cannot convert liqPrice to float: {liq_price_raw}")
 
         # Пересчитать actual risk и RR от РЕАЛЬНОЙ цены входа
         actual_stop_distance = abs(actual_entry_price - stop_price)
