@@ -1,0 +1,5 @@
+aiogram
+pybit
+redis
+python-dotenv
+loguru
