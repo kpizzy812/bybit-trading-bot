@@ -255,39 +255,8 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
             actual_qty = float(qty)
             logger.info(f"Limit order placed at ${actual_entry_price:.4f}")
 
-        # ===== 8. Stop Loss (КРИТИЧНО!) =====
-        await callback.message.edit_text("🛑 <b>Установка Stop Loss...</b>")
-
-        try:
-            await bybit.set_trading_stop(
-                symbol=symbol,
-                stop_loss=str(stop_price),
-                sl_trigger_by="MarkPrice"
-            )
-            logger.info(f"Stop Loss set at ${stop_price:.4f}")
-
-        except Exception as sl_error:
-            # PANIC! SL не установился - закрываем позицию
-            logger.error(f"CRITICAL: Failed to set SL: {sl_error}")
-
-            try:
-                await bybit.close_position(symbol)
-                logger.warning(f"Position closed due to SL failure")
-            except Exception as close_error:
-                logger.error(f"Failed to close position: {close_error}")
-
-            await callback.message.edit_text(
-                f"❌ <b>Критическая ошибка!</b>\n\n"
-                f"Не удалось установить Stop Loss.\n"
-                f"Позиция была экстренно закрыта.\n\n"
-                f"Ошибка: {str(sl_error)}",
-                reply_markup=None
-            )
-            await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
-            return
-
-        # ===== 9. Take Profit =====
-        await callback.message.edit_text("🎯 <b>Установка Take Profit...</b>")
+        # ===== 8-9. Stop Loss & Take Profit (атомарная установка) =====
+        await callback.message.edit_text("🛑 <b>Установка SL/TP...</b>")
 
         tp_success = True
         stop_distance = abs(actual_entry_price - stop_price)
@@ -296,12 +265,37 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
             if tp_mode == "single":
                 # Single TP - цена указана пользователем
                 tp_price = data.get('tp_price')
-                await bybit.set_trading_stop(
-                    symbol=symbol,
-                    take_profit=str(tp_price),
-                    tp_trigger_by="MarkPrice"
-                )
-                logger.info(f"Single TP set at ${tp_price:.4f}")
+
+                # ✅ АТОМАРНО: один вызов для SL + TP
+                try:
+                    await bybit.set_trading_stop(
+                        symbol=symbol,
+                        stop_loss=str(stop_price),
+                        take_profit=str(tp_price),
+                        sl_trigger_by="MarkPrice",
+                        tp_trigger_by="MarkPrice"
+                    )
+                    logger.info(f"SL/TP set: SL=${stop_price:.4f}, TP=${tp_price:.4f}")
+
+                except Exception as sl_tp_error:
+                    # PANIC! SL/TP не установились - закрываем позицию
+                    logger.error(f"CRITICAL: Failed to set SL/TP: {sl_tp_error}")
+
+                    try:
+                        await bybit.close_position(symbol)
+                        logger.warning(f"Position closed due to SL/TP failure")
+                    except Exception as close_error:
+                        logger.error(f"Failed to close position: {close_error}")
+
+                    await callback.message.edit_text(
+                        f"❌ <b>Критическая ошибка!</b>\n\n"
+                        f"Не удалось установить Stop Loss / Take Profit.\n"
+                        f"Позиция была экстренно закрыта.\n\n"
+                        f"Ошибка: {str(sl_tp_error)}",
+                        reply_markup=None
+                    )
+                    await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+                    return
 
             elif tp_mode == "rr":
                 # TP по RR
@@ -315,15 +309,69 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
                 # Округлить до tickSize
                 tp_price_str = round_price(tp_price, instrument_info['tickSize'])
 
-                await bybit.set_trading_stop(
-                    symbol=symbol,
-                    take_profit=tp_price_str,
-                    tp_trigger_by="MarkPrice"
-                )
-                logger.info(f"RR TP set at ${tp_price_str} (RR {tp_rr})")
+                # ✅ АТОМАРНО: один вызов для SL + TP
+                try:
+                    await bybit.set_trading_stop(
+                        symbol=symbol,
+                        stop_loss=str(stop_price),
+                        take_profit=tp_price_str,
+                        sl_trigger_by="MarkPrice",
+                        tp_trigger_by="MarkPrice"
+                    )
+                    logger.info(f"SL/TP set: SL=${stop_price:.4f}, TP=${tp_price_str} (RR {tp_rr})")
+
+                except Exception as sl_tp_error:
+                    # PANIC! SL/TP не установились - закрываем позицию
+                    logger.error(f"CRITICAL: Failed to set SL/TP: {sl_tp_error}")
+
+                    try:
+                        await bybit.close_position(symbol)
+                        logger.warning(f"Position closed due to SL/TP failure")
+                    except Exception as close_error:
+                        logger.error(f"Failed to close position: {close_error}")
+
+                    await callback.message.edit_text(
+                        f"❌ <b>Критическая ошибка!</b>\n\n"
+                        f"Не удалось установить Stop Loss / Take Profit.\n"
+                        f"Позиция была экстренно закрыта.\n\n"
+                        f"Ошибка: {str(sl_tp_error)}",
+                        reply_markup=None
+                    )
+                    await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+                    return
 
             elif tp_mode == "ladder":
                 # Ladder TP - два уровня
+                # ✅ СНАЧАЛА: Установить SL на позицию (КРИТИЧНО!)
+                try:
+                    await bybit.set_trading_stop(
+                        symbol=symbol,
+                        stop_loss=str(stop_price),
+                        sl_trigger_by="MarkPrice"
+                    )
+                    logger.info(f"Stop Loss set at ${stop_price:.4f}")
+
+                except Exception as sl_error:
+                    # PANIC! SL не установился - закрываем позицию
+                    logger.error(f"CRITICAL: Failed to set SL for ladder: {sl_error}")
+
+                    try:
+                        await bybit.close_position(symbol)
+                        logger.warning(f"Position closed due to SL failure (ladder mode)")
+                    except Exception as close_error:
+                        logger.error(f"Failed to close position: {close_error}")
+
+                    await callback.message.edit_text(
+                        f"❌ <b>Критическая ошибка!</b>\n\n"
+                        f"Не удалось установить Stop Loss.\n"
+                        f"Позиция была экстренно закрыта.\n\n"
+                        f"Ошибка: {str(sl_error)}",
+                        reply_markup=None
+                    )
+                    await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+                    return
+
+                # Рассчитать уровни TP
                 tp_rr_1 = data.get('tp_rr_1', 2.0)
                 tp_rr_2 = data.get('tp_rr_2', 3.0)
 

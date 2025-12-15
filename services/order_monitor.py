@@ -32,6 +32,7 @@ class PendingOrder:
         self.leverage = order_data.get('leverage', 5)
         self.user_id = order_data['user_id']
         self.sl_already_set = order_data.get('sl_already_set', False)  # SL уже на ордере
+        self.testnet = order_data.get('testnet', False)  # Testnet режим
         self.created_at = datetime.utcnow()
 
 
@@ -198,7 +199,8 @@ class OrderMonitor:
                     outcome=None,
                     rr_planned=rr_planned,
                     rr_actual=None,
-                    status="open"
+                    status="open",
+                    testnet=order.testnet
                 )
                 await self.trade_logger.log_trade(trade_record)
                 logger.info(f"Trade entry logged for {order.symbol} @ ${actual_entry_price:.2f}")

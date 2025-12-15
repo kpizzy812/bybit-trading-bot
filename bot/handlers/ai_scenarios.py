@@ -563,7 +563,8 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                 'targets': targets,
                 'leverage': leverage,
                 'user_id': user_id,
-                'sl_already_set': True  # SL уже на ордере
+                'sl_already_set': True,  # SL уже на ордере
+                'testnet': testnet_mode  # Режим торговли
             })
             logger.info(f"Order {order_id} registered with OrderMonitor for auto ladder TP (SL on order)")
 
@@ -641,7 +642,8 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                 outcome=None,
                 rr_planned=rr_planned,
                 rr_actual=None,
-                status="open"
+                status="open",
+                testnet=testnet_mode  # Режим торговли
             )
             await trade_logger.log_trade(trade_record)
             logger.info(f"Trade entry logged for {symbol} @ ${actual_entry_price:.2f}")

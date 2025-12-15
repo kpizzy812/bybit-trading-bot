@@ -24,7 +24,9 @@ class OrdersMixin:
         stop_loss: Optional[str] = None,
         take_profit: Optional[str] = None,
         sl_trigger_by: str = "MarkPrice",
-        tp_trigger_by: str = "MarkPrice"
+        tp_trigger_by: str = "MarkPrice",
+        time_in_force: Optional[str] = None,
+        post_only: Optional[bool] = None
     ) -> Dict:
         """
         Разместить ордер
@@ -34,6 +36,8 @@ class OrdersMixin:
             take_profit: Цена тейк-профита (опционально)
             sl_trigger_by: Тип триггера SL (MarkPrice, LastPrice, IndexPrice)
             tp_trigger_by: Тип триггера TP (MarkPrice, LastPrice, IndexPrice)
+            time_in_force: GTC (по умолчанию), IOC, FOK
+            post_only: True = только maker, False = может быть taker (для ladder TP рекомендуется False)
 
         Returns:
             {'orderId': '...', 'orderLinkId': '...', ...}
@@ -64,6 +68,14 @@ class OrdersMixin:
 
             if close_on_trigger:
                 params['closeOnTrigger'] = True
+
+            # Time in force (для limit ордеров)
+            if time_in_force:
+                params['timeInForce'] = time_in_force
+
+            # Post-only (для maker-only ордеров)
+            if post_only is not None:
+                params['postOnlyOrder'] = post_only
 
             # SL/TP для ордера (будет активирован при исполнении)
             if stop_loss:

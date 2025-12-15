@@ -164,7 +164,8 @@ async def partial_close_position(callback: CallbackQuery, settings_storage, trad
                 symbol=symbol,
                 exit_price=mark_price,
                 pnl_usd=partial_pnl,
-                is_partial=True
+                is_partial=True,
+                testnet=testnet
             )
         except Exception as log_error:
             logger.error(f"Failed to log partial close: {log_error}")
@@ -248,7 +249,8 @@ async def close_position_confirmed(callback: CallbackQuery, settings_storage, tr
                     symbol=symbol,
                     exit_price=mark_price,
                     pnl_usd=unrealized_pnl,
-                    is_partial=False
+                    is_partial=False,
+                    testnet=testnet
                 )
             except Exception as log_error:
                 logger.error(f"Failed to log full close: {log_error}")
@@ -266,7 +268,8 @@ async def close_position_confirmed(callback: CallbackQuery, settings_storage, tr
                     symbol=symbol,
                     exit_price=mark_price,
                     pnl_usd=partial_pnl,
-                    is_partial=True
+                    is_partial=True,
+                    testnet=testnet
                 )
             except Exception as log_error:
                 logger.error(f"Failed to log partial close: {log_error}")
@@ -433,7 +436,8 @@ async def panic_close_all_execute(callback: CallbackQuery, settings_storage, tra
                         symbol=symbol,
                         exit_price=mark_price,
                         pnl_usd=unrealized_pnl,
-                        is_partial=False
+                        is_partial=False,
+                        testnet=testnet
                     )
                 except Exception as log_error:
                     logger.error(f"Failed to log panic close for {symbol}: {log_error}")
