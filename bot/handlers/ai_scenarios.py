@@ -77,6 +77,9 @@ async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings
     await state.update_data(symbol=symbol, timeframe=timeframe)
     await state.set_state(AIScenarioStates.viewing_scenarios)
 
+    # КРИТИЧНО: Ответить на callback СРАЗУ, ДО долгого запроса!
+    await callback.answer()
+
     # Показать загрузку
     await callback.message.edit_text(
         f"🔄 <b>Анализирую {symbol} на {timeframe}...</b>\n\n"
@@ -135,8 +138,6 @@ async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings
             reply_markup=ai_scenarios_kb.get_symbols_keyboard()
         )
         await state.set_state(AIScenarioStates.choosing_symbol)
-
-    await callback.answer()
 
 
 async def show_scenarios_list(message: Message, scenarios: list, symbol: str, timeframe: str):
@@ -305,6 +306,7 @@ async def ai_trade_with_risk(callback: CallbackQuery, state: FSMContext, setting
     data = await state.get_data()
     scenarios = data.get("scenarios", [])
     scenario = scenarios[scenario_index]
+    symbol = data.get("symbol", "BTCUSDT")  # Берем symbol из state!
 
     user_id = callback.from_user.id
     settings = await settings_storage.get_settings(user_id)
@@ -316,12 +318,12 @@ async def ai_trade_with_risk(callback: CallbackQuery, state: FSMContext, setting
     await state.set_state(AIScenarioStates.confirmation)
 
     # Рассчитать позицию
-    await show_trade_confirmation(callback.message, scenario, risk_usd, leverage, settings)
+    await show_trade_confirmation(callback.message, scenario, symbol, risk_usd, leverage, settings)
 
     await callback.answer()
 
 
-async def show_trade_confirmation(message: Message, scenario: dict, risk_usd: float, leverage: int, settings):
+async def show_trade_confirmation(message: Message, scenario: dict, symbol: str, risk_usd: float, leverage: int, settings):
     """Показать карточку подтверждения с расчётами"""
 
     # Получить параметры сценария
@@ -338,16 +340,24 @@ async def show_trade_confirmation(message: Message, scenario: dict, risk_usd: fl
     stop_price = stop_loss.get("recommended", 0)
 
     targets = scenario.get("targets", [])
-    tp_price = targets[0].get("price", 0) if targets else 0
-    tp_rr = targets[0].get("rr", 0) if targets else 0
 
     # Простой расчёт для preview
     stop_distance = abs(entry_price - stop_price)
     qty_estimate = risk_usd / stop_distance if stop_distance > 0 else 0
     margin_estimate = (qty_estimate * entry_price) / leverage if leverage > 0 else 0
 
-    symbol = scenario.get("symbol", "UNKNOWN")
     coin = symbol.replace("USDT", "")
+
+    # Формируем TP info для ВСЕХ уровней
+    tp_info = ""
+    if targets:
+        for idx, target in enumerate(targets, 1):
+            tp_price = target.get("price", 0)
+            tp_rr = target.get("rr", 0)
+            partial_pct = target.get("partial_close_pct", 100)
+            tp_info += f"🎯 <b>TP{idx}:</b> ${tp_price:.2f} (RR {tp_rr:.1f}) - {partial_pct}%\n"
+    else:
+        tp_info = "🎯 <b>TP:</b> N/A\n"
 
     # Карточка подтверждения
     card = f"""
@@ -357,8 +367,7 @@ async def show_trade_confirmation(message: Message, scenario: dict, risk_usd: fl
 
 ⚡ <b>Entry:</b> Market @ ${entry_price:.2f}
 🛑 <b>Stop:</b> ${stop_price:.2f}
-🎯 <b>TP:</b> ${tp_price:.2f} (RR {tp_rr:.1f})
-
+{tp_info}
 💰 <b>Risk:</b> ${risk_usd}
 📊 <b>Leverage:</b> {leverage}x
 📦 <b>Qty:</b> ~{qty_estimate:.4f} {coin}

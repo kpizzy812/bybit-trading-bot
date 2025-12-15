@@ -78,6 +78,27 @@ def get_bybit_keys(testnet: bool) -> tuple[str, str]:
     )
 
 
+# ============================================================
+# SYNTRA AI API
+# ============================================================
+
+# Syntra AI API URL (аналитическая система)
+SYNTRA_API_URL = os.getenv('SYNTRA_API_URL', 'http://localhost:8000')
+
+# API Key для Syntra AI (опционально, если требуется аутентификация)
+SYNTRA_API_KEY = os.getenv('SYNTRA_API_KEY')
+
+# Таймаут для запросов к Syntra AI (секунды)
+SYNTRA_API_TIMEOUT = int(os.getenv('SYNTRA_API_TIMEOUT', 30))
+
+# Включить AI сценарии в боте
+AI_SCENARIOS_ENABLED = os.getenv('AI_SCENARIOS_ENABLED', 'true').lower() == 'true'
+
+
+# ============================================================
+# REDIS
+# ============================================================
+
 # Redis
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))

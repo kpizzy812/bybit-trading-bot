@@ -164,6 +164,7 @@ def get_risk_keyboard() -> InlineKeyboardMarkup:
     """
     Клавиатура выбора риска
     Пресеты: $5, $10, $15, Custom
+    + Опция Position Size (указать размер позиции напрямую)
     """
     builder = InlineKeyboardBuilder()
 
@@ -175,7 +176,12 @@ def get_risk_keyboard() -> InlineKeyboardMarkup:
     )
 
     builder.row(
-        InlineKeyboardButton(text="💰 Custom", callback_data="risk:custom")
+        InlineKeyboardButton(text="💰 Custom Risk", callback_data="risk:custom")
+    )
+
+    # Новая опция: указать размер позиции напрямую
+    builder.row(
+        InlineKeyboardButton(text="💵 Position Size", callback_data="risk:position_size")
     )
 
     builder.row(

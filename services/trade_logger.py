@@ -16,38 +16,29 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TradeRecord:
     """Запись о закрытой сделке"""
+    # Обязательные поля (без дефолтов)
     trade_id: str
     user_id: int
     timestamp: str  # ISO format
-
-    # Trade params
     symbol: str
     side: str  # "Buy" or "Sell"
     entry_price: float
-    exit_price: Optional[float] = None
-
-    # Position details
     qty: float
     leverage: int
     margin_mode: str
-
-    # Risk management
     stop_price: float
-    tp_price: Optional[float] = None
     risk_usd: float
 
-    # Results
+    # Опциональные поля (с дефолтами)
+    exit_price: Optional[float] = None
+    tp_price: Optional[float] = None
     pnl_usd: Optional[float] = None
     pnl_percent: Optional[float] = None
     roe_percent: Optional[float] = None
     outcome: Optional[str] = None  # "win", "loss", "breakeven"
-
-    # RR
     rr_planned: Optional[float] = None
     rr_actual: Optional[float] = None
-
-    # Status
-    status: str = "closed"  # "closed", "liquidated", "partial"
+    status: str = "closed"  # "closed", "liquidated", "partial", "open"
 
     def to_dict(self) -> Dict:
         return asdict(self)

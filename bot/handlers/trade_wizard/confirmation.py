@@ -33,6 +33,7 @@ async def move_to_confirmation(message_or_query, state: FSMContext):
     entry_price = data.get('entry_price')
     stop_price = data.get('stop_price')
     risk_usd = data.get('risk_usd')
+    position_size_usd = data.get('position_size_usd')
     leverage = data.get('leverage')
     tp_mode = data.get('tp_mode')
 
@@ -41,8 +42,17 @@ async def move_to_confirmation(message_or_query, state: FSMContext):
 
     # Простой расчёт
     stop_distance = abs(entry_price - stop_price)
-    qty_estimate = risk_usd / stop_distance
-    margin_estimate = (qty_estimate * entry_price) / leverage
+
+    if position_size_usd:
+        # Режим Position Size - рассчитываем от размера позиции
+        qty_estimate = position_size_usd / entry_price
+        risk_estimate = qty_estimate * stop_distance
+        margin_estimate = position_size_usd / leverage
+    else:
+        # Режим Risk - стандартный расчёт
+        qty_estimate = risk_usd / stop_distance
+        risk_estimate = risk_usd
+        margin_estimate = (qty_estimate * entry_price) / leverage
 
     # TP info
     tp_info = ""
@@ -64,6 +74,12 @@ async def move_to_confirmation(message_or_query, state: FSMContext):
         tp2 = entry_price + (stop_distance * tp_rr_2) if side == "Buy" else entry_price - (stop_distance * tp_rr_2)
         tp_info = f"🪜 <b>TP1:</b> ${tp1:.4f} (50%)\n🪜 <b>TP2:</b> ${tp2:.4f} (50%)"
 
+    # Формируем инфо о риске/размере позиции
+    if position_size_usd:
+        risk_info = f"💵 <b>Position:</b> ${position_size_usd}\n💰 <b>Risk:</b> ~${risk_estimate:.2f}"
+    else:
+        risk_info = f"💰 <b>Risk:</b> ${risk_estimate:.2f}"
+
     card = f"""
 📊 <b>Trade Summary</b>
 
@@ -73,7 +89,7 @@ async def move_to_confirmation(message_or_query, state: FSMContext):
 🛑 <b>Stop:</b> ${stop_price:.4f}
 {tp_info}
 
-💰 <b>Risk:</b> ${risk_usd}
+{risk_info}
 📊 <b>Leverage:</b> {leverage}x
 📦 <b>Qty:</b> ~{qty_estimate:.4f} {symbol.replace('USDT', '')}
 💵 <b>Margin:</b> ~${margin_estimate:.2f}
@@ -145,14 +161,29 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
         # ===== 5. Risk calculation & validation =====
         await callback.message.edit_text("📊 <b>Расчёт позиции...</b>")
 
-        position_calc = await risk_calc.calculate_position(
-            symbol=symbol,
-            side=side,
-            entry_price=entry_price,
-            stop_price=stop_price,
-            risk_usd=risk_usd,
-            leverage=leverage
-        )
+        # Проверяем режим: risk_usd или position_size_usd
+        position_size_usd = data.get('position_size_usd')
+
+        if position_size_usd:
+            # Режим Position Size - рассчитываем от размера позиции
+            position_calc = await risk_calc.calculate_position_from_size(
+                symbol=symbol,
+                side=side,
+                entry_price=entry_price,
+                stop_price=stop_price,
+                position_size_usd=position_size_usd,
+                leverage=leverage
+            )
+        else:
+            # Режим Risk - стандартный расчёт
+            position_calc = await risk_calc.calculate_position(
+                symbol=symbol,
+                side=side,
+                entry_price=entry_price,
+                stop_price=stop_price,
+                risk_usd=risk_usd,
+                leverage=leverage
+            )
 
         qty = position_calc['qty']
         margin_required = position_calc['margin_required']

@@ -38,8 +38,9 @@ async def move_to_risk_selection(message_or_query, state: FSMContext):
         f"🔄 <b>Направление:</b> {side_text}\n"
         f"⚡ <b>Вход:</b> {entry_type} @ ${entry_price:.4f}\n"
         f"🛑 <b>Стоп:</b> {stop_info}\n\n"
-        f"💰 <b>Выбери размер риска:</b>\n"
-        f"<i>Это сумма, которую готов потерять при SL</i>"
+        f"💰 <b>Выбери размер риска или позиции:</b>\n"
+        f"<i>• Risk - сумма потери при SL\n"
+        f"• Position Size - размер позиции напрямую</i>"
     )
 
     if hasattr(message_or_query, 'edit_text'):
@@ -69,6 +70,18 @@ async def risk_selected(callback: CallbackQuery, state: FSMContext, settings_sto
         await callback.answer()
         return
 
+    if risk_str == "position_size":
+        # Режим Position Size - указываем размер позиции напрямую
+        await callback.message.edit_text(
+            "💵 <b>Введи размер позиции в USD:</b>\n"
+            f"<i>Это будет размер твоей позиции (qty * entry_price)</i>\n"
+            f"<i>Например: 5 (для позиции на $5)</i>",
+            reply_markup=trade_kb.get_skip_button()
+        )
+        await state.update_data(input_mode="position_size")
+        await callback.answer()
+        return
+
     try:
         risk_usd = float(risk_str)
 
@@ -82,7 +95,7 @@ async def risk_selected(callback: CallbackQuery, state: FSMContext, settings_sto
             )
             return
 
-        await state.update_data(risk_usd=risk_usd)
+        await state.update_data(risk_usd=risk_usd, position_size_usd=None, input_mode="risk")
         await move_to_leverage_selection(callback.message, state)
         await callback.answer()
 
@@ -92,23 +105,33 @@ async def risk_selected(callback: CallbackQuery, state: FSMContext, settings_sto
 
 @router.message(TradeStates.choosing_risk_lev, F.text)
 async def custom_risk_entered(message: Message, state: FSMContext, settings_storage):
-    """Обработка custom риска"""
+    """Обработка custom риска или position size"""
     try:
-        risk_usd = float(message.text.strip())
+        value = float(message.text.strip())
 
-        if risk_usd <= 0:
-            await message.answer("❌ Риск должен быть больше 0")
+        if value <= 0:
+            await message.answer("❌ Значение должно быть больше 0")
             return
 
-        user_settings = await settings_storage.get_settings(message.from_user.id)
-        max_risk = user_settings.max_risk_per_trade
+        # Проверяем режим ввода
+        data = await state.get_data()
+        input_mode = data.get('input_mode', 'risk')
 
-        if risk_usd > max_risk:
-            await message.answer(f"❌ Риск ${risk_usd} превышает макс. ${max_risk}")
-            return
+        if input_mode == "position_size":
+            # Режим Position Size - сохраняем position_size_usd
+            await state.update_data(position_size_usd=value, risk_usd=None)
+            await move_to_leverage_selection(message, state)
+        else:
+            # Режим Risk - проверяем лимиты и сохраняем risk_usd
+            user_settings = await settings_storage.get_settings(message.from_user.id)
+            max_risk = user_settings.max_risk_per_trade
 
-        await state.update_data(risk_usd=risk_usd)
-        await move_to_leverage_selection(message, state)
+            if value > max_risk:
+                await message.answer(f"❌ Риск ${value} превышает макс. ${max_risk}")
+                return
+
+            await state.update_data(risk_usd=value, position_size_usd=None)
+            await move_to_leverage_selection(message, state)
 
     except ValueError:
         await message.answer("❌ Введи корректную сумму (например: 12.50)")

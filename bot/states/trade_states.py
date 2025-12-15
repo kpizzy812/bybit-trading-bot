@@ -1,6 +1,26 @@
 from aiogram.fsm.state import State, StatesGroup
 
 
+class AIScenarioStates(StatesGroup):
+    """
+    FSM States для AI Scenarios (быстрое открытие на основе AI анализа)
+
+    Шаги:
+    1. Выбор символа и таймфрейма
+    2. Просмотр сценариев от Syntra AI
+    3. Выбор сценария
+    4. Выбор риска ($5, $10, $20, $50, custom)
+    5. Подтверждение и execute
+    """
+
+    choosing_symbol = State()       # Шаг 1: Выбор символа
+    choosing_timeframe = State()    # Шаг 2: Выбор таймфрейма
+    viewing_scenarios = State()     # Шаг 3: Просмотр сценариев
+    viewing_detail = State()        # Шаг 4: Детальный просмотр сценария
+    entering_custom_risk = State()  # Шаг 5: Ввод custom риска
+    confirmation = State()          # Шаг 6: Подтверждение
+
+
 class TradeStates(StatesGroup):
     """
     FSM States для Trade Wizard (пошаговое открытие сделки)

@@ -21,6 +21,49 @@ class RiskCalculator:
     def __init__(self, bybit_client):
         self.bybit = bybit_client
 
+    async def calculate_position_from_size(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        stop_price: float,
+        position_size_usd: float,
+        leverage: int,
+        tp_price: Optional[float] = None
+    ) -> Dict:
+        """
+        Рассчитать параметры позиции на основе размера позиции (position size)
+
+        Args:
+            symbol: Торговая пара
+            side: "Long" или "Short"
+            entry_price: Цена входа
+            stop_price: Цена стоп-лосса
+            position_size_usd: Размер позиции в USD (qty * entry_price)
+            leverage: Плечо
+            tp_price: Цена тейк-профита (опционально)
+
+        Returns:
+            Аналогично calculate_position()
+        """
+        # Рассчитываем qty из position_size
+        qty_raw = position_size_usd / entry_price
+
+        # Рассчитываем risk на основе qty и stop_distance
+        stop_distance = abs(entry_price - stop_price)
+        risk_usd = qty_raw * stop_distance
+
+        # Используем основной метод с рассчитанным risk_usd
+        return await self.calculate_position(
+            symbol=symbol,
+            side=side,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            risk_usd=risk_usd,
+            leverage=leverage,
+            tp_price=tp_price
+        )
+
     async def calculate_position(
         self,
         symbol: str,
