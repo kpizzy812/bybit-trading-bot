@@ -29,7 +29,7 @@ async def open_trade_handler(message: Message, state: FSMContext):
 
 @router.message(F.text == "📊 Позиции")
 async def positions_handler(message: Message, settings_storage, lock_manager):
-    """Показать открытые позиции"""
+    """Показать открытые позиции и ордера"""
     from bot.keyboards.positions_kb import get_positions_list_kb
 
     # Получаем настройки пользователя
@@ -41,49 +41,70 @@ async def positions_handler(message: Message, settings_storage, lock_manager):
 
         client = BybitClient(testnet=testnet)
         positions = await client.get_positions()
+        orders = await client.get_open_orders()
 
-        if not positions:
+        if not positions and not orders:
             await message.answer(
-                "📊 <b>Открытых позиций нет</b>\n\n"
+                "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
                 "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю",
                 reply_markup=get_main_menu()
             )
             return
 
-        # Формируем список позиций
-        text = "📊 <b>Твои открытые позиции:</b>\n\n"
+        text = ""
 
-        for pos in positions:
-            symbol = pos.get('symbol')
-            side = pos.get('side')  # Buy/Sell
-            size = float(pos.get('size', 0))
-            entry_price = float(pos.get('avgPrice', 0))
-            mark_price = float(pos.get('markPrice', 0))
-            unrealized_pnl = float(pos.get('unrealisedPnl', 0))
-            leverage = pos.get('leverage', '?')
-            liq_price = pos.get('liqPrice', 'N/A')
+        # Позиции
+        if positions:
+            text += "📊 <b>Открытые позиции:</b>\n\n"
+            for pos in positions:
+                symbol = pos.get('symbol')
+                side = pos.get('side')  # Buy/Sell
+                size = float(pos.get('size', 0))
+                entry_price = float(pos.get('avgPrice', 0))
+                mark_price = float(pos.get('markPrice', 0))
+                unrealized_pnl = float(pos.get('unrealisedPnl', 0))
+                leverage = pos.get('leverage', '?')
+                liq_price = pos.get('liqPrice', 'N/A')
 
-            # Рассчитываем ROE%
-            roe = 0
-            if entry_price > 0:
-                roe = (unrealized_pnl / (size * entry_price)) * float(leverage) * 100
+                # Рассчитываем ROE%
+                roe = 0
+                if entry_price > 0:
+                    roe = (unrealized_pnl / (size * entry_price)) * float(leverage) * 100
 
-            # Эмодзи для направления
-            side_emoji = "🟢" if side == "Buy" else "🔴"
-            pnl_emoji = "💰" if unrealized_pnl >= 0 else "📉"
+                # Эмодзи для направления
+                side_emoji = "🟢" if side == "Buy" else "🔴"
+                pnl_emoji = "💰" if unrealized_pnl >= 0 else "📉"
 
-            text += (
-                f"{side_emoji} <b>{symbol}</b> {side}\n"
-                f"  Size: {size} | Leverage: {leverage}x\n"
-                f"  Entry: ${entry_price:.4f} | Mark: ${mark_price:.4f}\n"
-                f"  {pnl_emoji} PnL: ${unrealized_pnl:.2f} ({roe:+.2f}%)\n"
-                f"  Liq: ${liq_price}\n\n"
-            )
+                text += (
+                    f"{side_emoji} <b>{symbol}</b> {side}\n"
+                    f"  Size: {size} | Leverage: {leverage}x\n"
+                    f"  Entry: ${entry_price:.4f} | Mark: ${mark_price:.4f}\n"
+                    f"  {pnl_emoji} PnL: ${unrealized_pnl:.2f} ({roe:+.2f}%)\n"
+                    f"  Liq: ${liq_price}\n\n"
+                )
 
-        text += "\n💡 <i>Нажми на позицию для управления</i>"
+        # Ордера
+        if orders:
+            text += "⏳ <b>Ожидающие ордера:</b>\n\n"
+            for order in orders:
+                symbol = order.get('symbol')
+                side = order.get('side')
+                price = float(order.get('price', 0))
+                qty = order.get('qty', '0')
+                order_type = order.get('orderType', 'Limit')
 
-        # Inline кнопки для управления позициями
-        await message.answer(text, reply_markup=get_positions_list_kb(positions))
+                side_emoji = "🟢" if side == "Buy" else "🔴"
+
+                text += (
+                    f"⏳ {side_emoji} <b>{symbol}</b> {side}\n"
+                    f"   {order_type} @ ${price:.4f}\n"
+                    f"   Qty: {qty}\n\n"
+                )
+
+        text += "💡 <i>Нажми для управления</i>"
+
+        # Inline кнопки для управления
+        await message.answer(text, reply_markup=get_positions_list_kb(positions, orders))
 
     except Exception as e:
         await message.answer(

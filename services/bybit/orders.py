@@ -169,6 +169,34 @@ class OrdersMixin:
             logger.error(f"Error cancelling order: {e}")
             raise BybitError(f"Failed to cancel order: {str(e)}")
 
+    async def get_open_orders(self, symbol: Optional[str] = None) -> list:
+        """
+        Получить все открытые ордера (лимитные ордера ожидающие исполнения)
+
+        Args:
+            symbol: Опционально - фильтр по символу
+
+        Returns:
+            List of open orders
+        """
+        try:
+            params = {
+                'category': config.BYBIT_CATEGORY,
+                'settleCoin': 'USDT'
+            }
+
+            if symbol:
+                params['symbol'] = symbol
+
+            response = self.client.get_open_orders(**params)
+            result = self._handle_response(response)
+
+            return result.get('list', [])
+
+        except Exception as e:
+            logger.error(f"Error getting open orders: {e}")
+            raise BybitError(f"Failed to get open orders: {str(e)}")
+
     async def get_order_history(
         self,
         symbol: str,

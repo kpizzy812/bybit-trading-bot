@@ -9,6 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from bot.keyboards.positions_kb import (
     get_positions_list_kb,
     get_position_detail_kb,
+    get_order_detail_kb,
     get_move_sl_confirmation_kb,
     get_close_confirmation_kb,
     get_panic_close_all_confirmation_kb
@@ -32,7 +33,7 @@ class PositionStates(StatesGroup):
 
 @router.callback_query(F.data == "pos_refresh")
 async def refresh_positions(callback: CallbackQuery, settings_storage):
-    """Обновить список позиций"""
+    """Обновить список позиций и ордеров"""
     await callback.answer("🔄 Обновление...")
 
     user_id = callback.from_user.id
@@ -42,21 +43,28 @@ async def refresh_positions(callback: CallbackQuery, settings_storage):
     try:
         client = BybitClient(testnet=testnet)
         positions = await client.get_positions()
+        orders = await client.get_open_orders()
 
-        if not positions:
+        if not positions and not orders:
             await callback.message.edit_text(
-                "📊 <b>Открытых позиций нет</b>\n\n"
+                "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
                 "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю"
             )
             return
 
-        # Формируем список позиций
-        text = "📊 <b>Твои открытые позиции:</b>\n\n"
-        text += await _format_positions_list(positions)
+        # Формируем список
+        text = ""
+        if positions:
+            text += "📊 <b>Открытые позиции:</b>\n\n"
+            text += await _format_positions_list(positions)
+
+        if orders:
+            text += "⏳ <b>Ожидающие ордера:</b>\n\n"
+            text += await _format_orders_list(orders)
 
         await callback.message.edit_text(
             text,
-            reply_markup=get_positions_list_kb(positions)
+            reply_markup=get_positions_list_kb(positions, orders)
         )
 
     except Exception as e:
@@ -457,12 +465,117 @@ async def panic_close_all_execute(callback: CallbackQuery, settings_storage, tra
 
 
 # ============================================================
+# CALLBACK: Детали ордера
+# ============================================================
+
+@router.callback_query(F.data.startswith("order_detail:"))
+async def show_order_detail(callback: CallbackQuery, settings_storage):
+    """Показать детали ордера"""
+    await callback.answer()
+
+    # Парсим: order_detail:SYMBOL:ORDER_ID
+    parts = callback.data.split(":")
+    symbol = parts[1]
+    order_id_prefix = parts[2]
+
+    user_id = callback.from_user.id
+    user_settings = await settings_storage.get_settings(user_id)
+    testnet = user_settings.testnet_mode
+
+    try:
+        client = BybitClient(testnet=testnet)
+        orders = await client.get_open_orders(symbol=symbol)
+
+        # Ищем ордер по префиксу ID
+        order = None
+        for o in orders:
+            if o.get('orderId', '').startswith(order_id_prefix):
+                order = o
+                break
+
+        if not order:
+            await callback.message.edit_text(
+                f"❌ Ордер не найден (возможно уже исполнен или отменён)"
+            )
+            return
+
+        # Формируем детали ордера
+        text = await _format_order_detail(order)
+        order_id = order.get('orderId')
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=get_order_detail_kb(symbol, order_id)
+        )
+
+    except Exception as e:
+        logger.error(f"Error showing order detail: {e}")
+        await callback.message.edit_text(
+            f"❌ Ошибка при получении ордера:\n{str(e)}"
+        )
+
+
+# ============================================================
+# CALLBACK: Отмена ордера
+# ============================================================
+
+@router.callback_query(F.data.startswith("order_cancel:"))
+async def cancel_order(callback: CallbackQuery, settings_storage):
+    """Отменить ордер"""
+    # Парсим: order_cancel:SYMBOL:ORDER_ID
+    parts = callback.data.split(":")
+    symbol = parts[1]
+    order_id_prefix = parts[2]
+
+    await callback.answer("Отменяю ордер...")
+
+    user_id = callback.from_user.id
+    user_settings = await settings_storage.get_settings(user_id)
+    testnet = user_settings.testnet_mode
+
+    try:
+        client = BybitClient(testnet=testnet)
+
+        # Получаем полный order_id
+        orders = await client.get_open_orders(symbol=symbol)
+        order_id = None
+        for o in orders:
+            if o.get('orderId', '').startswith(order_id_prefix):
+                order_id = o.get('orderId')
+                break
+
+        if not order_id:
+            await callback.message.edit_text(
+                f"❌ Ордер не найден (возможно уже исполнен или отменён)"
+            )
+            await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+            return
+
+        # Отменяем ордер
+        await client.cancel_order(symbol=symbol, order_id=order_id)
+
+        await callback.message.edit_text(
+            f"✅ <b>Ордер отменён!</b>\n\n"
+            f"Symbol: {symbol}\n\n"
+            f"💡 Используй <b>📊 Позиции</b> для просмотра активных сделок"
+        )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+
+    except BybitError as e:
+        logger.error(f"Error cancelling order: {e}")
+        await callback.message.edit_text(
+            f"❌ <b>Ошибка при отмене ордера</b>\n\n{str(e)}"
+        )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+
+
+# ============================================================
 # CALLBACK: Назад к списку
 # ============================================================
 
 @router.callback_query(F.data == "pos_back_to_list")
 async def back_to_positions_list(callback: CallbackQuery, settings_storage):
-    """Вернуться к списку позиций"""
+    """Вернуться к списку позиций и ордеров"""
     await callback.answer()
 
     user_id = callback.from_user.id
@@ -472,20 +585,27 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage):
     try:
         client = BybitClient(testnet=testnet)
         positions = await client.get_positions()
+        orders = await client.get_open_orders()
 
-        if not positions:
+        if not positions and not orders:
             await callback.message.edit_text(
-                "📊 <b>Открытых позиций нет</b>\n\n"
+                "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
                 "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю"
             )
             return
 
-        text = "📊 <b>Твои открытые позиции:</b>\n\n"
-        text += await _format_positions_list(positions)
+        text = ""
+        if positions:
+            text += "📊 <b>Открытые позиции:</b>\n\n"
+            text += await _format_positions_list(positions)
+
+        if orders:
+            text += "⏳ <b>Ожидающие ордера:</b>\n\n"
+            text += await _format_orders_list(orders)
 
         await callback.message.edit_text(
             text,
-            reply_markup=get_positions_list_kb(positions)
+            reply_markup=get_positions_list_kb(positions, orders)
         )
 
     except Exception as e:
@@ -539,6 +659,65 @@ async def _format_positions_list(positions: list) -> str:
         )
 
     return text
+
+
+async def _format_orders_list(orders: list) -> str:
+    """Форматирование списка ордеров"""
+    text = ""
+
+    for order in orders:
+        symbol = order.get('symbol')
+        side = order.get('side')
+        price = float(order.get('price', 0))
+        qty = order.get('qty', '0')
+        order_type = order.get('orderType', 'Limit')
+
+        # Эмодзи
+        side_emoji = "🟢" if side == "Buy" else "🔴"
+
+        text += (
+            f"⏳ {side_emoji} <b>{symbol}</b> {side}\n"
+            f"   {order_type} @ ${price:.4f}\n"
+            f"   Qty: {qty}\n\n"
+        )
+
+    return text
+
+
+async def _format_order_detail(order: dict) -> str:
+    """Форматирование детальной информации об ордере"""
+    symbol = order.get('symbol')
+    side = order.get('side')
+    order_type = order.get('orderType', 'Limit')
+    price = float(order.get('price', 0))
+    qty = order.get('qty', '0')
+    created_time = order.get('createdTime', '')
+    order_status = order.get('orderStatus', 'New')
+
+    # SL/TP на ордере
+    stop_loss = order.get('stopLoss', '')
+    take_profit = order.get('takeProfit', '')
+
+    # Эмодзи
+    side_emoji = "🟢" if side == "Buy" else "🔴"
+
+    text = f"""
+⏳ <b>{symbol} {side_emoji} {side}</b>
+
+<b>Ордер:</b>
+Тип: {order_type}
+Цена: ${price:.4f}
+Количество: {qty}
+Статус: {order_status}
+
+<b>Risk Management:</b>
+SL: {stop_loss if stop_loss else '❌ Not Set'}
+TP: {take_profit if take_profit else '❌ Not Set'}
+
+💡 Нажми "Отменить ордер" чтобы отменить
+"""
+
+    return text.strip()
 
 
 async def _format_position_detail(position: dict) -> str:

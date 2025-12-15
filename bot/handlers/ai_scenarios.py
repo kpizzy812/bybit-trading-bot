@@ -594,6 +594,24 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         actual_qty = float(filled_order['qty'])
         actual_risk = abs(actual_entry_price - stop_price) * actual_qty
 
+        # Зарегистрировать вход в позицию в trade_logger
+        try:
+            margin = (actual_entry_price * actual_qty) / leverage
+            await trade_logger.log_entry(
+                user_id=user_id,
+                symbol=symbol,
+                side=side,
+                entry_price=actual_entry_price,
+                qty=actual_qty,
+                leverage=leverage,
+                stop_loss=stop_price,
+                risk_usd=actual_risk,
+                margin_usd=margin
+            )
+            logger.info(f"Trade entry logged for {symbol} @ ${actual_entry_price:.2f}")
+        except Exception as log_error:
+            logger.error(f"Failed to log trade entry: {log_error}")
+
         # Установить Stop Loss
         await bybit.set_trading_stop(
             symbol=symbol,
@@ -602,46 +620,51 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         )
 
         # ===== УСТАНОВИТЬ LADDER TAKE PROFIT =====
+        tp_success = True
         if targets:
-            # Получить instrument info для округления
-            instrument_info = position_calc.get('instrument_info', {})
-            tick_size = instrument_info.get('tickSize', '0.01')
-            qty_step = instrument_info.get('qtyStep', '0.001')
+            try:
+                # Получить instrument info для округления
+                instrument_info = position_calc.get('instrument_info', {})
+                tick_size = instrument_info.get('tickSize', '0.01')
+                qty_step = instrument_info.get('qtyStep', '0.001')
 
-            # Подготовить уровни TP
-            tp_levels = []
-            total_pct = 0
+                # Подготовить уровни TP
+                tp_levels = []
+                total_pct = 0
 
-            for target in targets:
-                tp_price = target.get("price", 0)
-                partial_pct = target.get("partial_close_pct", 0)
+                for target in targets:
+                    tp_price = target.get("price", 0)
+                    partial_pct = target.get("partial_close_pct", 0)
 
-                # Рассчитать qty для этого уровня
-                tp_qty_raw = (actual_qty * partial_pct) / 100
-                tp_qty = round_qty(tp_qty_raw, qty_step, round_down=True)
+                    # Рассчитать qty для этого уровня
+                    tp_qty_raw = (actual_qty * partial_pct) / 100
+                    tp_qty = round_qty(tp_qty_raw, qty_step, round_down=True)
 
-                # Округлить цену
-                tp_price_str = round_price(tp_price, tick_size)
+                    # Округлить цену
+                    tp_price_str = round_price(tp_price, tick_size)
 
-                tp_levels.append({
-                    'price': tp_price_str,
-                    'qty': tp_qty
-                })
+                    tp_levels.append({
+                        'price': tp_price_str,
+                        'qty': tp_qty
+                    })
 
-                total_pct += partial_pct
+                    total_pct += partial_pct
 
-            # Валидация: сумма % должна быть ~100
-            if abs(total_pct - 100) > 1:  # Допуск 1%
-                logger.warning(f"TP percentages sum to {total_pct}%, expected 100%")
+                # Валидация: сумма % должна быть ~100
+                if abs(total_pct - 100) > 1:  # Допуск 1%
+                    logger.warning(f"TP percentages sum to {total_pct}%, expected 100%")
 
-            # Разместить ladder TP ордера
-            await bybit.place_ladder_tp(
-                symbol=symbol,
-                position_side=order_side,
-                tp_levels=tp_levels,
-                client_order_id_prefix=trade_id
-            )
-            logger.info(f"Ladder TP set: {len(tp_levels)} levels")
+                # Разместить ladder TP ордера
+                await bybit.place_ladder_tp(
+                    symbol=symbol,
+                    position_side=order_side,
+                    tp_levels=tp_levels,
+                    client_order_id_prefix=trade_id
+                )
+                logger.info(f"Ladder TP set: {len(tp_levels)} levels")
+            except Exception as tp_error:
+                logger.error(f"Error setting ladder TP: {tp_error}", exc_info=True)
+                tp_success = False
 
         # Success!
         actual_risk = abs(actual_entry_price - stop_price) * actual_qty
@@ -670,8 +693,15 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 📊 <b>Leverage:</b> {leverage}x
 📦 <b>Qty:</b> {actual_qty}
 
-<i>✅ Ladder TP: {len(targets) if targets else 0} уровня | AI сценарий</i>
 """
+        # Статус установки SL/TP
+        if targets:
+            if tp_success:
+                success_text += f"<i>✅ SL/TP установлены автоматически ({len(targets)} уровня TP) | AI сценарий</i>\n"
+            else:
+                success_text += "<i>⚠️ SL установлен, но ошибка при установке TP!</i>\n<i>Проверь позицию вручную!</i>\n"
+        else:
+            success_text += "<i>✅ SL установлен автоматически | AI сценарий</i>\n"
 
         await callback.message.edit_text(success_text, reply_markup=None)
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())

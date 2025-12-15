@@ -5,12 +5,13 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def get_positions_list_kb(positions: list) -> InlineKeyboardMarkup:
+def get_positions_list_kb(positions: list, orders: list = None) -> InlineKeyboardMarkup:
     """
-    Клавиатура со списком позиций + управляющие кнопки
+    Клавиатура со списком позиций и ордеров + управляющие кнопки
 
     Args:
         positions: Список позиций от Bybit API
+        orders: Список открытых ордеров от Bybit API
 
     Returns:
         InlineKeyboardMarkup
@@ -36,6 +37,26 @@ def get_positions_list_kb(positions: list) -> InlineKeyboardMarkup:
             callback_data=f"pos_detail:{symbol}"
         )
 
+    # Кнопки для ордеров
+    if orders:
+        for order in orders:
+            symbol = order.get('symbol')
+            side = order.get('side')  # "Buy" or "Sell"
+            price = float(order.get('price', 0))
+            qty = order.get('qty', '0')
+            order_id = order.get('orderId')
+
+            # Эмодзи
+            side_emoji = "🟢" if side == "Buy" else "🔴"
+
+            # Текст кнопки - показываем что это ордер
+            button_text = f"⏳ {side_emoji} {symbol} @ ${price:.2f}"
+
+            builder.button(
+                text=button_text,
+                callback_data=f"order_detail:{symbol}:{order_id[:20]}"
+            )
+
     # По одной кнопке на строку
     builder.adjust(1)
 
@@ -43,6 +64,35 @@ def get_positions_list_kb(positions: list) -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="🔄 Обновить", callback_data="pos_refresh"),
         InlineKeyboardButton(text="🧯 Закрыть всё", callback_data="pos_panic_close_all")
+    )
+
+    return builder.as_markup()
+
+
+def get_order_detail_kb(symbol: str, order_id: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура для управления ордером
+
+    Args:
+        symbol: Торговая пара
+        order_id: ID ордера
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Отмена ордера
+    builder.row(
+        InlineKeyboardButton(
+            text="❌ Отменить ордер",
+            callback_data=f"order_cancel:{symbol}:{order_id[:20]}"
+        )
+    )
+
+    # Назад
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="pos_back_to_list")
     )
 
     return builder.as_markup()

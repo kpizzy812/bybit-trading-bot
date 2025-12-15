@@ -187,17 +187,23 @@ class OrderMonitor:
             logger.info(f"SL set at ${order.stop_price:.2f} for {order.symbol}")
 
             # 3. Установить ladder Take Profit
+            tp_success = True
             if order.targets:
-                await self._set_ladder_tp(order, actual_qty)
+                tp_success = await self._set_ladder_tp(order, actual_qty)
 
             # 4. Отправить уведомление
-            await self._send_fill_notification(user_id, order, actual_entry_price, actual_qty)
+            await self._send_fill_notification(user_id, order, actual_entry_price, actual_qty, tp_success)
 
         except Exception as e:
             logger.error(f"Error handling filled order {order.order_id}: {e}", exc_info=True)
 
-    async def _set_ladder_tp(self, order: PendingOrder, actual_qty: float):
-        """Установить ladder TP для исполненного ордера"""
+    async def _set_ladder_tp(self, order: PendingOrder, actual_qty: float) -> bool:
+        """
+        Установить ladder TP для исполненного ордера
+
+        Returns:
+            True если TP установлены успешно, False если ошибка
+        """
         try:
             # Получить instrument info
             instrument_info = await self.client.get_instrument_info(order.symbol)
@@ -230,11 +236,13 @@ class OrderMonitor:
                 client_order_id_prefix=order.order_id[:20]  # Используем order_id как prefix
             )
             logger.info(f"Ladder TP set: {len(tp_levels)} levels for {order.symbol}")
+            return True
 
         except Exception as e:
             logger.error(f"Error setting ladder TP: {e}", exc_info=True)
+            return False
 
-    async def _send_fill_notification(self, user_id: int, order: PendingOrder, entry_price: float, qty: float):
+    async def _send_fill_notification(self, user_id: int, order: PendingOrder, entry_price: float, qty: float, tp_success: bool = True):
         """Отправить уведомление о fill"""
         try:
             side_emoji = "🟢" if order.side == "Long" else "🔴"
@@ -261,10 +269,18 @@ class OrderMonitor:
 📊 <b>Leverage:</b> {order.leverage}x
 📦 <b>Qty:</b> {qty}
 
-<i>✅ SL/TP установлены автоматически</i>
-
-⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
 """
+
+            # Статус установки SL/TP
+            if order.targets:
+                if tp_success:
+                    message += "<i>✅ SL/TP установлены автоматически</i>\n"
+                else:
+                    message += "<i>⚠️ SL установлен, но ошибка при установке TP!</i>\n<i>Проверь позицию вручную!</i>\n"
+            else:
+                message += "<i>✅ SL установлен автоматически</i>\n"
+
+            message += f"\n⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
 
             await self.bot.send_message(
                 chat_id=user_id,
