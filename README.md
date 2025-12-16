@@ -1,17 +1,20 @@
 # Bybit Trading Bot
 
-🤖 One-tap execution бот для трейдинга на Bybit с автоматическим управлением рисками.
+Telegram-бот для трейдинга на Bybit с автоматическим управлением рисками и интеграцией AI-аналитики.
 
-## Особенности
+## Возможности
 
-- ✅ **Автоматический расчёт размера позиции** от риска (правильная формула: `qty = risk_$ / |entry - stop|`)
-- ✅ **Обязательные SL/TP** при каждом входе
-- ✅ **Trade Wizard** - пошаговый процесс открытия сделки
-- ✅ **Мониторинг позиций** в реальном времени с PnL
-- ✅ **Безопасность:** API только Trade (без Withdraw), подтверждения, лимиты
-- ✅ **Testnet/Live режимы** для тестирования и реальной торговли
-- ✅ **Защита от race conditions** с Redis locks
-- ✅ **Точное округление** через Decimal (избегание float артефактов)
+- **Автоматический расчёт размера позиции** от риска (`qty = risk_$ / |entry - stop|`)
+- **Обязательные SL/TP** при каждом входе
+- **Trade Wizard** - пошаговый процесс открытия сделки
+- **AI Scenarios** - интеграция с Syntra AI для анализа рынка
+- **Position Monitor** - мониторинг позиций в реальном времени с уведомлениями
+- **Auto Breakeven** - автоматический перенос SL на entry после TP1
+- **Post-SL Analysis** - анализ поведения цены после стоп-лосса
+- **Trade History** - журнал всех сделок с детальной статистикой
+- **Testnet/Live режимы** для тестирования и реальной торговли
+- **Защита от race conditions** с Redis locks
+- **Точное округление** через Decimal
 
 ## Поддерживаемые инструменты
 
@@ -65,14 +68,23 @@ BYBIT_API_SECRET=your_api_secret_here
 BYBIT_TESTNET_API_KEY=your_testnet_api_key_here
 BYBIT_TESTNET_API_SECRET=your_testnet_api_secret_here
 
-# Redis (опционально, для production)
+# Owner ID (только этот пользователь сможет использовать бота)
+OWNER_TELEGRAM_ID=123456789
+
+# Syntra AI (опционально, для AI-аналитики)
+SYNTRA_API_URL=http://localhost:8000
+SYNTRA_API_KEY=
+SYNTRA_API_TIMEOUT=180
+AI_SCENARIOS_ENABLED=true
+
+# Redis (опционально)
 REDIS_HOST=localhost
 REDIS_PORT=6379
 REDIS_DB=0
 REDIS_PASSWORD=
 
 # Bot Settings
-DEFAULT_TESTNET_MODE=true  # Начинайте с true!
+DEFAULT_TESTNET_MODE=true
 LOG_LEVEL=INFO
 ```
 
@@ -138,6 +150,7 @@ python main.py
 
 Вы увидите главное меню с кнопками:
 - ➕ Открыть сделку
+- 🤖 AI Scenarios - AI-анализ рынка
 - 📊 Позиции
 - ⚙️ Настройки
 - 🧾 История
@@ -183,33 +196,57 @@ python main.py
 
 ```
 futures-bot/
-├── .env.example          # Пример переменных окружения
-├── .env                  # Ваши настройки (не коммитить!)
-├── .gitignore
-├── requirements.txt      # Зависимости
-├── config.py             # Конфигурация
-├── main.py               # Точка входа
-├── PROGRESS.md           # Детальный план разработки
-├── README.md
-├── TZ.txt                # Техническое задание
+├── config.py                  # Конфигурация
+├── main.py                    # Точка входа
 ├── bot/
-│   ├── handlers/         # Обработчики команд и сообщений
-│   │   ├── start.py
-│   │   ├── trade_wizard.py  # TODO
-│   │   ├── positions.py     # TODO
-│   │   └── settings.py      # TODO
-│   ├── keyboards/        # Клавиатуры
-│   │   └── main_menu.py
-│   ├── states/           # FSM состояния
-│   └── middlewares/      # Middleware
+│   ├── handlers/
+│   │   ├── start.py           # /start команда
+│   │   ├── menu.py            # Главное меню
+│   │   ├── positions.py       # Управление позициями
+│   │   ├── settings.py        # Настройки пользователя
+│   │   ├── history.py         # История сделок
+│   │   ├── ai_scenarios.py    # AI-аналитика (Syntra AI)
+│   │   └── trade_wizard/      # Пошаговое открытие сделки
+│   │       ├── symbol_side.py # Выбор инструмента и направления
+│   │       ├── entry.py       # Цена входа
+│   │       ├── stop.py        # Стоп-лосс
+│   │       ├── risk_leverage.py # Риск и плечо
+│   │       ├── take_profit.py # Тейк-профит
+│   │       ├── confirmation.py # Подтверждение сделки
+│   │       ├── navigation.py  # Навигация по визарду
+│   │       └── utils.py       # Утилиты визарда
+│   ├── keyboards/             # Inline клавиатуры
+│   │   ├── main_menu.py
+│   │   ├── trade_kb.py
+│   │   ├── positions_kb.py
+│   │   ├── settings_kb.py
+│   │   ├── history_kb.py
+│   │   └── ai_scenarios_kb.py
+│   ├── states/
+│   │   └── trade_states.py    # FSM состояния
+│   └── middlewares/
+│       └── owner_check.py     # Проверка владельца
 ├── services/
-│   ├── bybit_client.py   # Wrapper для Bybit API V5
-│   ├── risk_calculator.py # Расчёт размера позиции
-│   └── ...
+│   ├── bybit/                 # Bybit API V5
+│   │   ├── client.py          # Base client
+│   │   ├── orders.py          # Работа с ордерами
+│   │   ├── positions.py       # Работа с позициями
+│   │   ├── trading_stop.py    # SL/TP
+│   │   ├── wallet.py          # Баланс
+│   │   └── market_data.py     # Рыночные данные
+│   ├── risk_calculator.py     # Расчёт размера позиции
+│   ├── position_monitor.py    # Мониторинг позиций
+│   ├── order_monitor.py       # Мониторинг ордеров
+│   ├── breakeven_manager.py   # Auto Breakeven
+│   ├── trade_logger.py        # Журнал сделок (Redis)
+│   ├── post_sl_analyzer.py    # Анализ после SL
+│   └── syntra_client.py       # Клиент Syntra AI API
 ├── storage/
-│   └── user_settings.py  # Redis storage + trade locks
-└── utils/
-    └── validators.py     # Decimal-округление, валидация
+│   └── user_settings.py       # Redis storage + trade locks
+├── utils/
+│   └── validators.py          # Decimal-округление, валидация
+└── docs/
+    └── AI_ANALYSIS/           # Документация по Syntra AI
 ```
 
 ## Критичные детали реализации
@@ -277,26 +314,21 @@ finally:
 ✅ Начинать с Testnet
 ✅ Rollback при ошибке (если SL не установился → закрыть позицию)
 
-## Roadmap
+## Статус разработки
 
-См. [PROGRESS.md](PROGRESS.md) для детального плана разработки.
-
-**Phase 1: Foundation** ✅ (completed)
-- Базовая структура проекта
-- Bybit API client с V5
+**Реализовано:**
+- Bybit API V5 client (orders, positions, wallet, market data)
 - Risk calculator с правильной формулой
-- User settings storage + trade locks
-
-**Phase 2: Telegram Bot Core** (in progress)
-- Главное меню
-- FSM для настроек
-
-**Phase 3: Trade Wizard** (TODO)
-- Пошаговый процесс открытия сделки
-- Symbol → Side → Entry → Stop → Risk/Lev → TP → Confirm
-- Order execution с wait_until_filled
-
-**Phase 4-7:** См. PROGRESS.md
+- Trade Wizard (полный flow открытия сделки)
+- Position management (просмотр, закрытие, передвижение SL)
+- User settings (риск, плечо, маржа, TP режимы)
+- Trade history с детальной статистикой
+- Position Monitor с уведомлениями
+- Auto Breakeven после TP1
+- Post-SL Analysis
+- AI Scenarios (интеграция с Syntra AI)
+- Owner-only режим
+- Redis storage + in-memory fallback
 
 ## Troubleshooting
 
