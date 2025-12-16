@@ -8,12 +8,14 @@ Quick execution flow: выбор сценария → выбор риска → 
 - Confidence-based Risk Scaling (масштабирование риска от уверенности AI)
 - Smart order routing (Market/Limit в зависимости от зоны)
 - Ladder TP support
+- Entry Plan support (ladder entry с несколькими ордерами)
 """
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from loguru import logger
+from typing import Optional
 
 import config
 from bot.states.trade_states import AIScenarioStates
@@ -24,6 +26,7 @@ from services.syntra_client import get_syntra_client, SyntraAPIError
 from services.bybit import BybitClient
 from services.risk_calculator import RiskCalculator
 from services.trade_logger import TradeRecord
+from services.entry_plan import EntryPlan, EntryOrder
 from utils.validators import round_qty, round_price
 
 router = Router()
@@ -78,6 +81,82 @@ def calculate_confidence_adjusted_risk(
     )
 
     return adjusted_risk, multiplier
+
+
+def parse_entry_plan(
+    scenario: dict,
+    total_qty: float,
+    trade_id: str,
+    user_id: int,
+    symbol: str,
+    side: str,
+    risk_usd: float,
+    leverage: int,
+    testnet: bool
+) -> Optional[EntryPlan]:
+    """
+    Распарсить entry_plan из AI сценария.
+
+    Returns:
+        EntryPlan или None если сценарий использует старый формат
+    """
+    entry_plan_data = scenario.get('entry_plan')
+
+    if not entry_plan_data:
+        return None  # Fallback на старую логику
+
+    # Парсим orders
+    orders = []
+    for i, order_data in enumerate(entry_plan_data.get('orders', [])):
+        order_qty = total_qty * (order_data['size_pct'] / 100)
+
+        orders.append(EntryOrder(
+            price=order_data['price'],
+            size_pct=order_data['size_pct'],
+            qty=order_qty,
+            order_type=order_data.get('type', 'limit'),
+            tag=order_data.get('tag', f"E{i+1}"),
+            source_level=order_data.get('source_level', '')
+        ).to_dict())
+
+    # Парсим activation
+    activation = entry_plan_data.get('activation', {})
+
+    # Парсим stop_loss
+    stop_loss = scenario.get('stop_loss', {})
+    stop_price = stop_loss.get('recommended', 0)
+
+    # Парсим targets
+    targets = scenario.get('targets', [])
+
+    import uuid
+    plan = EntryPlan(
+        plan_id=str(uuid.uuid4()),
+        trade_id=trade_id,
+        user_id=user_id,
+        symbol=symbol,
+        side=side,
+        mode=entry_plan_data.get('mode', 'ladder'),
+        orders=orders,
+        total_qty=total_qty,
+        activation_type=activation.get('type', 'immediate'),
+        activation_level=activation.get('level'),
+        max_distance_pct=activation.get('max_distance_pct', 0.5),
+        cancel_if=entry_plan_data.get('cancel_if', []),
+        time_valid_hours=entry_plan_data.get('time_valid_hours', 48),
+        stop_price=stop_price,
+        targets=targets,
+        leverage=leverage,
+        risk_usd=risk_usd,
+        testnet=testnet
+    )
+
+    logger.info(
+        f"Parsed entry_plan: {symbol} {side}, mode={plan.mode}, "
+        f"{len(orders)} orders, activation={plan.activation_type}"
+    )
+
+    return plan
 
 
 @router.message(Command("ai_scenarios"))
@@ -705,7 +784,7 @@ async def check_positions_limit(bybit: BybitClient, max_positions: int) -> tuple
 
 
 @router.callback_query(AIScenarioStates.confirmation, F.data.startswith("ai:confirm:"))
-async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_storage, lock_manager, trade_logger, order_monitor):
+async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_storage, lock_manager, trade_logger, order_monitor, entry_plan_monitor=None):
     """Выполнить сделку на основе AI сценария"""
     user_id = callback.from_user.id
 
@@ -847,6 +926,120 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         # Разместить ордер (Market или Limit)
         import uuid
         trade_id = str(uuid.uuid4())
+
+        # ===== ПРОВЕРКА ENTRY_PLAN (LADDER ENTRY) =====
+        entry_plan = parse_entry_plan(
+            scenario=scenario,
+            total_qty=qty,
+            trade_id=trade_id,
+            user_id=user_id,
+            symbol=symbol,
+            side=side,
+            risk_usd=risk_usd,
+            leverage=leverage,
+            testnet=testnet_mode
+        )
+
+        if entry_plan and entry_plan_monitor:
+            # === НОВАЯ ЛОГИКА: ENTRY PLAN ===
+            logger.info(f"Using entry_plan mode: {entry_plan.mode}, {len(entry_plan.orders)} orders")
+
+            # Создаём TradeRecord заранее (будет обновляться по мере fills)
+            try:
+                from services.trade_logger import calculate_fee, calculate_margin
+
+                # Используем первый entry price для начального расчёта
+                first_order = entry_plan.get_orders()[0]
+                initial_entry_price = first_order.price
+
+                margin_usd = calculate_margin(initial_entry_price, qty, leverage)
+                entry_fee_estimate = calculate_fee(initial_entry_price, qty, is_taker=False)
+
+                trade_record = TradeRecord(
+                    trade_id=trade_id,
+                    user_id=user_id,
+                    symbol=symbol,
+                    side=side,
+                    opened_at=datetime.utcnow().isoformat(),
+                    entry_price=initial_entry_price,
+                    qty=qty,
+                    leverage=leverage,
+                    margin_mode=settings.default_margin_mode,
+                    margin_usd=margin_usd,
+                    stop_price=stop_price,
+                    risk_usd=risk_usd,
+                    tp_price=targets[0].get("price") if targets else None,
+                    entry_fee_usd=entry_fee_estimate,
+                    total_fees_usd=entry_fee_estimate,
+                    status="open",
+                    testnet=testnet_mode,
+                    # Entry Plan fields
+                    entry_plan_id=entry_plan.plan_id,
+                    entry_mode=entry_plan.mode,
+                    entry_orders_count=len(entry_plan.orders),
+                    # AI Scenario fields
+                    scenario_id=str(uuid.uuid4()),
+                    scenario_source="syntra",
+                    scenario_bias=scenario.get("bias"),
+                    scenario_confidence=scenario.get("confidence"),
+                    timeframe=data.get("timeframe"),
+                    entry_reason=scenario.get("name"),
+                    scenario_snapshot=scenario
+                )
+                await trade_logger.log_trade(trade_record)
+                logger.info(f"Trade record created for entry_plan: {trade_id}")
+            except Exception as log_error:
+                logger.error(f"Failed to create trade record: {log_error}")
+
+            # Регистрируем план в мониторе
+            await entry_plan_monitor.register_plan(entry_plan)
+
+            # Формируем сообщение об успехе
+            success_text = f"""
+📋 <b>Entry Plan создан!</b>
+
+{side_emoji} <b>{symbol}</b> {bias.upper()}
+📊 Mode: {entry_plan.mode}
+
+<b>Entry Orders ({len(entry_plan.orders)}):</b>
+"""
+            for i, order in enumerate(entry_plan.get_orders(), 1):
+                success_text += f"   E{i}: ${order.price:.2f} ({order.size_pct:.0f}%) - {order.tag}\n"
+
+            success_text += f"""
+🛑 <b>Stop:</b> ${stop_price:.2f}
+"""
+            if targets:
+                for idx, target in enumerate(targets, 1):
+                    tp_price = target.get("price", 0)
+                    partial_pct = target.get("partial_close_pct", 0)
+                    success_text += f"🎯 <b>TP{idx}:</b> ${tp_price:.2f} ({partial_pct}%)\n"
+
+            activation_info = ""
+            if entry_plan.activation_type != "immediate":
+                activation_info = f"\n⏳ <b>Activation:</b> {entry_plan.activation_type} @ ${entry_plan.activation_level:.2f}"
+            else:
+                activation_info = "\n✅ <b>Activation:</b> immediate"
+
+            success_text += f"""
+{activation_info}
+⏰ <b>Valid:</b> {entry_plan.time_valid_hours}h
+💰 <b>Risk:</b> ${risk_usd:.2f}
+
+<i>🔔 Получишь уведомления по мере исполнения ордеров</i>
+"""
+
+            await callback.message.edit_text(success_text, reply_markup=None)
+            await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+
+            logger.info(f"Entry plan registered: {entry_plan.plan_id}, {symbol} {side}")
+
+            await lock_manager.release_lock(user_id)
+            await state.clear()
+            await callback.answer()
+            return
+
+        # ===== LEGACY: ОДИНОЧНЫЙ ENTRY (если нет entry_plan) =====
 
         if order_type == "Market":
             # Market order - размещаем и ждём fill

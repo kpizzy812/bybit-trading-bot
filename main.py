@@ -15,6 +15,7 @@ from storage.user_settings import create_storage_instances
 from services.trade_logger import create_trade_logger
 from services.position_monitor import create_position_monitor
 from services.order_monitor import create_order_monitor
+from services.entry_plan_monitor import create_entry_plan_monitor
 from services.breakeven_manager import create_breakeven_manager
 from services.post_sl_analyzer import create_post_sl_analyzer
 
@@ -151,6 +152,19 @@ async def main():
     # Запускаем order monitor
     await order_monitor.start()
 
+    # Инициализация entry plan monitor (для ladder entry)
+    logger.info("Initializing entry plan monitor...")
+    entry_plan_monitor = create_entry_plan_monitor(
+        bot=bot,
+        trade_logger=trade_logger,
+        testnet=config.DEFAULT_TESTNET_MODE,
+        check_interval=10
+    )
+
+    # Запускаем entry plan monitor
+    await entry_plan_monitor.start()
+    logger.info("📋 Entry Plan Monitor enabled")
+
     # Сохраняем в workflow_data для доступа из хэндлеров
     dp.workflow_data.update({
         'settings_storage': settings_storage,
@@ -158,6 +172,7 @@ async def main():
         'trade_logger': trade_logger,
         'position_monitor': position_monitor,
         'order_monitor': order_monitor,
+        'entry_plan_monitor': entry_plan_monitor,
         'breakeven_manager': breakeven_manager,
         'post_sl_analyzer': post_sl_analyzer
     })
@@ -194,6 +209,7 @@ async def main():
         logger.info("Shutting down...")
         await position_monitor.stop()
         await order_monitor.stop()
+        await entry_plan_monitor.stop()
         await post_sl_analyzer.close()
         await settings_storage.close()
         await lock_manager.close()

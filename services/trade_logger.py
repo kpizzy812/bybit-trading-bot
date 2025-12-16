@@ -111,6 +111,13 @@ class TradeRecord:
     sl_was_correct: Optional[bool] = None
     post_sl_move_pct: Optional[float] = None
 
+    # === ENTRY PLAN (ladder entry) ===
+    entry_plan_id: Optional[str] = None
+    entry_mode: str = "single"  # "ladder" | "single" | "dca"
+    entry_fills: Optional[List[Dict]] = None  # List[EntryFill]
+    entry_orders_count: int = 1
+    avg_entry_price: Optional[float] = None  # Средневзвешенная цена входа
+
     # === META ===
     status: str = "open"  # "open", "partial", "closed", "liquidated"
     testnet: bool = False
@@ -518,6 +525,84 @@ class TradeLogger:
 
         await self._replace_trade(user_id, target_trade)
         logger.info(f"Post-SL analysis updated for trade {trade_id}")
+
+    async def add_entry_fill(
+        self,
+        user_id: int,
+        trade_id: str,
+        fill_price: float,
+        fill_qty: float,
+        order_tag: str = "",
+        is_taker: bool = False,
+        testnet: Optional[bool] = None
+    ):
+        """
+        Добавить entry fill к сделке (для ladder entry).
+
+        Используется когда позиция набирается несколькими ордерами.
+        Пересчитывает avg_entry_price после каждого fill.
+
+        Args:
+            user_id: ID пользователя
+            trade_id: ID сделки
+            fill_price: Цена исполнения
+            fill_qty: Исполненное количество
+            order_tag: Метка ордера ("E1_ema20", "E2_support")
+            is_taker: Taker или Maker (для fees)
+            testnet: Режим
+        """
+        target_trade = await self.get_trade_by_id(user_id, trade_id, testnet)
+        if not target_trade:
+            logger.warning(f"Trade {trade_id} not found for entry fill")
+            return
+
+        # Создаём fill запись
+        fill_fee = calculate_fee(fill_price, fill_qty, is_taker)
+        fill_data = {
+            'fill_id': str(uuid.uuid4()),
+            'order_tag': order_tag,
+            'timestamp': datetime.utcnow().isoformat(),
+            'price': fill_price,
+            'qty': fill_qty,
+            'fee_usd': fill_fee
+        }
+
+        # Добавляем fill
+        if target_trade.entry_fills is None:
+            target_trade.entry_fills = []
+        target_trade.entry_fills.append(fill_data)
+
+        # Пересчитываем avg_entry_price (средневзвешенное)
+        total_value = sum(f['price'] * f['qty'] for f in target_trade.entry_fills)
+        total_qty = sum(f['qty'] for f in target_trade.entry_fills)
+
+        if total_qty > 0:
+            target_trade.avg_entry_price = total_value / total_qty
+            # Обновляем основной entry_price на avg
+            target_trade.entry_price = target_trade.avg_entry_price
+            target_trade.qty = total_qty
+
+        # Обновляем entry fees
+        target_trade.entry_fee_usd = (target_trade.entry_fee_usd or 0) + fill_fee
+        target_trade.total_fees_usd = (target_trade.entry_fee_usd or 0) + (target_trade.exit_fees_usd or 0)
+
+        # Пересчитываем risk_usd с новым avg_entry
+        if target_trade.stop_price and target_trade.avg_entry_price:
+            target_trade.risk_usd = abs(target_trade.avg_entry_price - target_trade.stop_price) * total_qty
+
+        # Пересчитываем margin
+        if target_trade.leverage and target_trade.leverage > 0:
+            target_trade.margin_usd = calculate_margin(
+                target_trade.avg_entry_price,
+                total_qty,
+                target_trade.leverage
+            )
+
+        await self._replace_trade(user_id, target_trade)
+        logger.info(
+            f"Entry fill added for trade {trade_id}: "
+            f"${fill_price:.2f} x {fill_qty}, avg_entry=${target_trade.avg_entry_price:.2f}"
+        )
 
     async def get_statistics(self, user_id: int, limit: int = 100, testnet: Optional[bool] = None) -> Dict:
         """Получить статистику по сделкам v2"""

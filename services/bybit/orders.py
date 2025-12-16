@@ -279,3 +279,95 @@ class OrdersMixin:
         except Exception as e:
             logger.error(f"Error getting order history: {e}")
             return None
+
+    async def cancel_orders_by_prefix(
+        self,
+        symbol: str,
+        client_order_id_prefix: str
+    ) -> list:
+        """
+        Отменить все ордера с указанным префиксом client_order_id.
+
+        Используется для отмены всех entry ордеров плана при cancel условии.
+
+        Args:
+            symbol: Торговая пара
+            client_order_id_prefix: Префикс orderLinkId (напр. "plan_abc123")
+
+        Returns:
+            List of cancelled order_ids
+        """
+        cancelled = []
+
+        try:
+            open_orders = await self.get_open_orders(symbol=symbol)
+
+            for order in open_orders:
+                order_link_id = order.get('orderLinkId', '')
+                if order_link_id.startswith(client_order_id_prefix):
+                    try:
+                        await self.cancel_order(
+                            symbol=symbol,
+                            order_id=order['orderId']
+                        )
+                        cancelled.append(order['orderId'])
+                        logger.debug(f"Cancelled order {order['orderId']} (prefix: {client_order_id_prefix})")
+                    except Exception as e:
+                        logger.error(f"Failed to cancel order {order['orderId']}: {e}")
+
+            if cancelled:
+                logger.info(f"Cancelled {len(cancelled)} orders with prefix '{client_order_id_prefix}'")
+
+            return cancelled
+
+        except Exception as e:
+            logger.error(f"Error in cancel_orders_by_prefix: {e}")
+            return cancelled
+
+    async def get_orders_by_prefix(
+        self,
+        symbol: str,
+        client_order_id_prefix: str,
+        include_history: bool = True
+    ) -> list:
+        """
+        Получить все ордера с указанным префиксом client_order_id.
+
+        Args:
+            symbol: Торговая пара
+            client_order_id_prefix: Префикс orderLinkId
+            include_history: Искать также в истории ордеров
+
+        Returns:
+            List of orders matching the prefix
+        """
+        result = []
+
+        try:
+            # Открытые ордера
+            open_orders = await self.get_open_orders(symbol=symbol)
+            for order in open_orders:
+                if order.get('orderLinkId', '').startswith(client_order_id_prefix):
+                    result.append(order)
+
+            # История ордеров (если нужно)
+            if include_history:
+                params = {
+                    'category': config.BYBIT_CATEGORY,
+                    'symbol': symbol,
+                    'limit': 50
+                }
+                response = self.client.get_order_history(**params)
+                history = self._handle_response(response)
+
+                for order in history.get('list', []):
+                    if order.get('orderLinkId', '').startswith(client_order_id_prefix):
+                        # Избегаем дубликатов
+                        if not any(o['orderId'] == order['orderId'] for o in result):
+                            result.append(order)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error in get_orders_by_prefix: {e}")
+            return result
