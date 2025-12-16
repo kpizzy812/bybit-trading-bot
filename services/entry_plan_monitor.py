@@ -3,13 +3,17 @@ Entry Plan Monitor
 
 Мониторинг Entry Plans с несколькими ордерами (ladder entry).
 Отслеживает активацию, fills, cancel условия и устанавливает SL/TP.
+Хранит планы в Redis для персистентности.
 """
 import asyncio
+import json
 import logging
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
 from aiogram import Bot
+import redis.asyncio as aioredis
 
+import config
 from services.bybit import BybitClient
 from services.entry_plan import EntryPlan, EntryOrder
 from services.trade_logger import TradeLogger, TradeRecord, calculate_fee, calculate_margin
@@ -17,13 +21,21 @@ from utils.validators import round_qty, round_price
 
 logger = logging.getLogger(__name__)
 
+# Redis key prefix
+ENTRY_PLAN_KEY_PREFIX = "entry_plan:"
+ENTRY_PLANS_INDEX_KEY = "entry_plans:active"
+ENTRY_PLANS_USER_PREFIX = "entry_plans:user:"  # {user_id} -> set of plan_ids
+
+# TTL для завершённых/отменённых планов (7 дней для истории)
+COMPLETED_PLAN_TTL_SECONDS = 7 * 24 * 3600
+
 
 class EntryPlanMonitor:
     """
     Мониторинг Entry Plans с несколькими ордерами.
 
     Ответственности:
-    1. Хранение активных планов (in-memory, TODO: Redis)
+    1. Хранение активных планов (Redis + in-memory cache)
     2. Проверка activation gate
     3. Размещение entry ордеров при активации
     4. Мониторинг fills всех entry ордеров
@@ -36,7 +48,8 @@ class EntryPlanMonitor:
         bot: Bot,
         trade_logger: TradeLogger,
         check_interval: int = 10,
-        testnet: bool = False
+        testnet: bool = False,
+        redis_url: str = None
     ):
         self.bot = bot
         self.trade_logger = trade_logger
@@ -46,11 +59,218 @@ class EntryPlanMonitor:
         # Bybit client
         self.client = BybitClient(testnet=testnet)
 
-        # Хранение планов: {plan_id: EntryPlan}
+        # Redis для персистентности
+        self.redis_url = redis_url or f"redis://{config.REDIS_HOST}:{config.REDIS_PORT}/{config.REDIS_DB}"
+        self.redis: Optional[aioredis.Redis] = None
+        self.use_redis = True
+
+        # Хранение планов: {plan_id: EntryPlan} (in-memory cache)
         self.active_plans: Dict[str, EntryPlan] = {}
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
+
+    # ==================== Redis Operations ====================
+
+    async def _connect_redis(self):
+        """Подключиться к Redis"""
+        if self.redis:
+            return True
+
+        try:
+            self.redis = await aioredis.from_url(
+                self.redis_url,
+                password=config.REDIS_PASSWORD,
+                decode_responses=True
+            )
+            await self.redis.ping()
+            logger.info(f"Entry plan monitor connected to Redis: {self.redis_url}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to connect to Redis: {e}. Using in-memory only.")
+            self.redis = None
+            self.use_redis = False
+            return False
+
+    async def _close_redis(self):
+        """Закрыть соединение с Redis"""
+        if self.redis:
+            await self.redis.close()
+            self.redis = None
+
+    async def _save_plan_to_redis(self, plan: EntryPlan, with_ttl: bool = False):
+        """
+        Сохранить план в Redis.
+
+        Args:
+            plan: EntryPlan объект
+            with_ttl: Установить TTL (для завершённых/отменённых планов)
+        """
+        if not self.use_redis or not self.redis:
+            return
+
+        try:
+            key = f"{ENTRY_PLAN_KEY_PREFIX}{plan.plan_id}"
+            plan_json = json.dumps(plan.to_dict())
+
+            if with_ttl:
+                await self.redis.set(key, plan_json, ex=COMPLETED_PLAN_TTL_SECONDS)
+            else:
+                await self.redis.set(key, plan_json)
+
+            # Добавить в индекс активных планов (если активен)
+            if plan.status not in ('cancelled', 'filled'):
+                await self.redis.sadd(ENTRY_PLANS_INDEX_KEY, plan.plan_id)
+            else:
+                # Удалить из активных при завершении
+                await self.redis.srem(ENTRY_PLANS_INDEX_KEY, plan.plan_id)
+
+            # Добавить в индекс планов пользователя
+            user_key = f"{ENTRY_PLANS_USER_PREFIX}{plan.user_id}"
+            await self.redis.sadd(user_key, plan.plan_id)
+
+            logger.debug(f"Plan {plan.plan_id} saved to Redis (ttl={with_ttl})")
+        except Exception as e:
+            logger.error(f"Failed to save plan to Redis: {e}")
+
+    async def _update_plan_in_redis(self, plan: EntryPlan):
+        """Обновить план в Redis"""
+        # Если план завершён — сохраняем с TTL
+        with_ttl = plan.status in ('cancelled', 'filled')
+        await self._save_plan_to_redis(plan, with_ttl=with_ttl)
+
+    async def _delete_plan_from_redis(self, plan_id: str):
+        """Удалить план из Redis"""
+        if not self.use_redis or not self.redis:
+            return
+
+        try:
+            key = f"{ENTRY_PLAN_KEY_PREFIX}{plan_id}"
+            await self.redis.delete(key)
+            await self.redis.srem(ENTRY_PLANS_INDEX_KEY, plan_id)
+            logger.debug(f"Plan {plan_id} deleted from Redis")
+        except Exception as e:
+            logger.error(f"Failed to delete plan from Redis: {e}")
+
+    async def _load_plans_from_redis(self) -> Dict[str, EntryPlan]:
+        """Загрузить все активные планы из Redis"""
+        plans = {}
+
+        if not self.use_redis or not self.redis:
+            return plans
+
+        try:
+            # Получить все plan_id из индекса
+            plan_ids = await self.redis.smembers(ENTRY_PLANS_INDEX_KEY)
+
+            for plan_id in plan_ids:
+                key = f"{ENTRY_PLAN_KEY_PREFIX}{plan_id}"
+                plan_json = await self.redis.get(key)
+
+                if plan_json:
+                    try:
+                        plan_data = json.loads(plan_json)
+                        plan = EntryPlan.from_dict(plan_data)
+                        plans[plan_id] = plan
+                    except Exception as e:
+                        logger.error(f"Failed to parse plan {plan_id}: {e}")
+                        # Удалить битый план из индекса
+                        await self.redis.srem(ENTRY_PLANS_INDEX_KEY, plan_id)
+                else:
+                    # План не найден, удалить из индекса
+                    await self.redis.srem(ENTRY_PLANS_INDEX_KEY, plan_id)
+
+            logger.info(f"Loaded {len(plans)} entry plans from Redis")
+        except Exception as e:
+            logger.error(f"Failed to load plans from Redis: {e}")
+
+        return plans
+
+    async def get_plan(self, plan_id: str) -> Optional[EntryPlan]:
+        """
+        Получить план по ID.
+
+        Сначала ищет в in-memory cache, затем в Redis.
+        """
+        # 1. Проверить in-memory cache
+        if plan_id in self.active_plans:
+            return self.active_plans[plan_id]
+
+        # 2. Попробовать загрузить из Redis
+        if self.use_redis and self.redis:
+            try:
+                key = f"{ENTRY_PLAN_KEY_PREFIX}{plan_id}"
+                plan_json = await self.redis.get(key)
+                if plan_json:
+                    plan_data = json.loads(plan_json)
+                    return EntryPlan.from_dict(plan_data)
+            except Exception as e:
+                logger.error(f"Failed to get plan {plan_id} from Redis: {e}")
+
+        return None
+
+    async def get_user_plans(
+        self,
+        user_id: int,
+        include_completed: bool = False
+    ) -> List[EntryPlan]:
+        """
+        Получить все планы пользователя.
+
+        Args:
+            user_id: ID пользователя
+            include_completed: Включать завершённые/отменённые планы
+
+        Returns:
+            Список EntryPlan отсортированный по created_at (новые первые)
+        """
+        plans = []
+
+        # 1. Планы из in-memory cache
+        for plan in self.active_plans.values():
+            if plan.user_id == user_id:
+                if include_completed or plan.status not in ('cancelled', 'filled'):
+                    plans.append(plan)
+
+        # 2. Если нужны завершённые — загрузить из Redis
+        if include_completed and self.use_redis and self.redis:
+            try:
+                user_key = f"{ENTRY_PLANS_USER_PREFIX}{user_id}"
+                plan_ids = await self.redis.smembers(user_key)
+
+                for plan_id in plan_ids:
+                    # Пропустить уже добавленные из cache
+                    if any(p.plan_id == plan_id for p in plans):
+                        continue
+
+                    key = f"{ENTRY_PLAN_KEY_PREFIX}{plan_id}"
+                    plan_json = await self.redis.get(key)
+
+                    if plan_json:
+                        try:
+                            plan_data = json.loads(plan_json)
+                            plan = EntryPlan.from_dict(plan_data)
+                            plans.append(plan)
+                        except Exception as e:
+                            logger.error(f"Failed to parse plan {plan_id}: {e}")
+                    else:
+                        # План истёк — удалить из индекса пользователя
+                        await self.redis.srem(user_key, plan_id)
+            except Exception as e:
+                logger.error(f"Failed to get user plans from Redis: {e}")
+
+        # Сортировка: новые первые
+        plans.sort(key=lambda p: p.created_at, reverse=True)
+        return plans
+
+    async def get_active_plans_count(self, user_id: int = None) -> int:
+        """Получить количество активных планов (опционально для user)"""
+        if user_id:
+            return sum(
+                1 for p in self.active_plans.values()
+                if p.user_id == user_id and p.status not in ('cancelled', 'filled')
+            )
+        return len(self.active_plans)
 
     # ==================== Public API ====================
 
@@ -62,6 +282,8 @@ class EntryPlanMonitor:
             plan: EntryPlan объект
         """
         self.active_plans[plan.plan_id] = plan
+        await self._save_plan_to_redis(plan)
+
         logger.info(
             f"Plan {plan.plan_id} registered: {plan.symbol} {plan.side}, "
             f"{len(plan.orders)} orders, mode={plan.mode}"
@@ -71,10 +293,11 @@ class EntryPlanMonitor:
         if plan.activation_type == "immediate":
             await self._activate_plan(plan)
 
-    def unregister_plan(self, plan_id: str):
+    async def unregister_plan(self, plan_id: str):
         """Убрать план из мониторинга"""
         if plan_id in self.active_plans:
             del self.active_plans[plan_id]
+            await self._delete_plan_from_redis(plan_id)
             logger.info(f"Plan {plan_id} unregistered")
 
     async def start(self):
@@ -82,6 +305,16 @@ class EntryPlanMonitor:
         if self._running:
             logger.warning("Entry plan monitor already running")
             return
+
+        # Подключиться к Redis
+        await self._connect_redis()
+
+        # Загрузить планы из Redis
+        if self.use_redis:
+            loaded_plans = await self._load_plans_from_redis()
+            self.active_plans.update(loaded_plans)
+            if loaded_plans:
+                logger.info(f"Restored {len(loaded_plans)} entry plans from Redis")
 
         self._running = True
         self._task = asyncio.create_task(self._monitor_loop())
@@ -96,6 +329,8 @@ class EntryPlanMonitor:
                 await self._task
             except asyncio.CancelledError:
                 pass
+
+        await self._close_redis()
         logger.info("Entry plan monitor stopped")
 
     # ==================== Main Loop ====================
@@ -146,6 +381,21 @@ class EntryPlanMonitor:
         try:
             ticker = await self.client.get_tickers(plan.symbol)
             current_price = float(ticker.get('markPrice', 0))
+
+            # DEBUG: логируем источник цены для диагностики
+            ticker_symbol = ticker.get('symbol', 'UNKNOWN')
+            logger.info(
+                f"Activation check: plan.symbol={plan.symbol}, "
+                f"ticker.symbol={ticker_symbol}, markPrice={current_price:.2f}"
+            )
+
+            # Sanity: проверяем что ticker вернул правильный символ
+            if ticker_symbol != plan.symbol:
+                logger.error(
+                    f"SYMBOL MISMATCH! plan={plan.symbol} vs ticker={ticker_symbol}. "
+                    f"Skipping activation check."
+                )
+                return
 
             if not current_price:
                 return
@@ -287,6 +537,9 @@ class EntryPlanMonitor:
                 order.status = "cancelled"
                 plan.orders[i] = order.to_dict()
 
+        # Сохраняем обновлённый план в Redis
+        await self._update_plan_in_redis(plan)
+
         # Уведомляем пользователя
         if placed_count > 0:
             await self._notify_plan_activated(plan, placed_count)
@@ -314,6 +567,15 @@ class EntryPlanMonitor:
 
         try:
             ticker = await self.client.get_tickers(plan.symbol)
+
+            # DEBUG: проверяем символ
+            ticker_symbol = ticker.get('symbol', 'UNKNOWN')
+            if ticker_symbol != plan.symbol:
+                logger.error(
+                    f"SYMBOL MISMATCH in cancel check! plan={plan.symbol} vs ticker={ticker_symbol}"
+                )
+                return False, ""
+
             prices = {
                 'mark': float(ticker.get('markPrice', 0)),
                 'last': float(ticker.get('lastPrice', 0)),
@@ -454,6 +716,9 @@ class EntryPlanMonitor:
         plan.filled_pct_at_cancel = plan.fill_percentage
         logger.info(f"Plan cancelled at {plan.filled_pct_at_cancel:.1f}% fill")
 
+        # Сохраняем отменённый план (для истории/аналитики) перед удалением
+        await self._update_plan_in_redis(plan)
+
         if plan.has_fills:
             fill_pct = plan.fill_percentage
             is_invalidation = self._is_invalidation_cancel(reason)
@@ -485,7 +750,7 @@ class EntryPlanMonitor:
             await self._notify_plan_cancelled(plan, reason)
 
         # Убираем из мониторинга
-        self.unregister_plan(plan.plan_id)
+        await self.unregister_plan(plan.plan_id)
 
     async def _close_partial_position(self, plan: EntryPlan):
         """Закрыть частичную позицию market ордером"""
@@ -608,6 +873,9 @@ class EntryPlanMonitor:
                     except Exception:
                         pass
 
+            # Сохраняем обновлённый план в Redis
+            await self._update_plan_in_redis(plan)
+
     async def _setup_sl_after_first_fill(self, plan: EntryPlan):
         """Установить SL после первого fill для защиты позиции"""
         try:
@@ -620,6 +888,8 @@ class EntryPlanMonitor:
             )
 
             plan.sl_set = True
+            await self._update_plan_in_redis(plan)
+
             logger.info(
                 f"SL set after first fill: {plan.symbol} @ ${plan.stop_price:.2f} "
                 f"(filled {plan.fill_percentage:.0f}%)"
@@ -682,7 +952,7 @@ class EntryPlanMonitor:
         await self._notify_plan_completed(plan)
 
         # Убираем из мониторинга
-        self.unregister_plan(plan.plan_id)
+        await self.unregister_plan(plan.plan_id)
 
     async def _setup_sl_tp(self, plan: EntryPlan):
         """Установить SL и ladder TP для позиции"""
