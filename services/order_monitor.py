@@ -54,16 +54,22 @@ class OrderMonitor:
         self.bot = bot
         self.trade_logger = trade_logger
         self.check_interval = check_interval
-        self.testnet = testnet
+        self.testnet = testnet  # Default, но каждый order имеет свой testnet флаг
 
-        # Создаем клиент один раз
-        self.client = BybitClient(testnet=testnet)
+        # Bybit clients (lazy init per testnet mode)
+        self._clients: Dict[bool, BybitClient] = {}
 
         # Храним pending orders: {user_id: {order_id: PendingOrder}}
         self.pending_orders: Dict[int, Dict[str, PendingOrder]] = {}
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
+
+    def _get_client(self, testnet: bool) -> BybitClient:
+        """Получить Bybit клиент для нужного режима (testnet/live)"""
+        if testnet not in self._clients:
+            self._clients[testnet] = BybitClient(testnet=testnet)
+        return self._clients[testnet]
 
     def register_order(self, order_data: dict):
         """Зарегистрировать ордер для мониторинга"""
@@ -126,10 +132,11 @@ class OrderMonitor:
     async def _check_order(self, user_id: int, order_id: str):
         """Проверить статус конкретного ордера"""
         order = self.pending_orders[user_id][order_id]
+        client = self._get_client(order.testnet)
 
         try:
             # Получить статус ордера от Bybit (сначала open orders, потом history)
-            order_info = await self.client.get_order(
+            order_info = await client.get_order(
                 symbol=order.symbol,
                 order_id=order_id
             )
@@ -211,8 +218,9 @@ class OrderMonitor:
                 logger.error(f"Failed to log trade entry: {log_error}")
 
             # 2. Установить Stop Loss (если не был уже установлен на ордере)
+            client = self._get_client(order.testnet)
             if not order.sl_already_set:
-                await self.client.set_trading_stop(
+                await client.set_trading_stop(
                     symbol=order.symbol,
                     stop_loss=str(order.stop_price),
                     sl_trigger_by="MarkPrice"
@@ -240,8 +248,9 @@ class OrderMonitor:
             True если TP установлены успешно, False если ошибка
         """
         try:
+            client = self._get_client(order.testnet)
             # Получить instrument info
-            instrument_info = await self.client.get_instrument_info(order.symbol)
+            instrument_info = await client.get_instrument_info(order.symbol)
             tick_size = instrument_info.get('tickSize', '0.01')
             qty_step = instrument_info.get('qtyStep', '0.001')
 
@@ -264,7 +273,7 @@ class OrderMonitor:
                 })
 
             # Разместить ladder TP ордера
-            await self.client.place_ladder_tp(
+            await client.place_ladder_tp(
                 symbol=order.symbol,
                 position_side=order.order_side,
                 tp_levels=tp_levels,

@@ -54,10 +54,10 @@ class EntryPlanMonitor:
         self.bot = bot
         self.trade_logger = trade_logger
         self.check_interval = check_interval
-        self.testnet = testnet
+        self.testnet = testnet  # Default, но каждый plan имеет свой testnet флаг
 
-        # Bybit client
-        self.client = BybitClient(testnet=testnet)
+        # Bybit clients (lazy init per testnet mode)
+        self._clients: Dict[bool, BybitClient] = {}
 
         # Redis для персистентности
         self.redis_url = redis_url or f"redis://{config.REDIS_HOST}:{config.REDIS_PORT}/{config.REDIS_DB}"
@@ -69,6 +69,12 @@ class EntryPlanMonitor:
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
+
+    def _get_client(self, testnet: bool) -> BybitClient:
+        """Получить Bybit клиент для нужного режима (testnet/live)"""
+        if testnet not in self._clients:
+            self._clients[testnet] = BybitClient(testnet=testnet)
+        return self._clients[testnet]
 
     # ==================== Redis Operations ====================
 
@@ -379,7 +385,8 @@ class EntryPlanMonitor:
     async def _check_activation(self, plan: EntryPlan):
         """Проверить условия активации плана с Direction sanity check"""
         try:
-            ticker = await self.client.get_tickers(plan.symbol)
+            client = self._get_client(plan.testnet)
+            ticker = await client.get_tickers(plan.symbol)
             current_price = float(ticker.get('markPrice', 0))
 
             # DEBUG: логируем источник цены для диагностики
@@ -486,8 +493,10 @@ class EntryPlanMonitor:
         plan.activated_at = datetime.now(timezone.utc).isoformat()
         plan.status = "active"
 
+        client = self._get_client(plan.testnet)
+
         # Получить instrument info для округления
-        instrument_info = await self.client.get_instrument_info(plan.symbol)
+        instrument_info = await client.get_instrument_info(plan.symbol)
         tick_size = instrument_info.get('tickSize', '0.01')
         qty_step = instrument_info.get('qtyStep', '0.001')
 
@@ -512,7 +521,7 @@ class EntryPlanMonitor:
                 client_id = f"EP:{short_plan_id}:{tag}"[:36]
 
                 # Размещаем ордер
-                placed_order = await self.client.place_order(
+                placed_order = await client.place_order(
                     symbol=plan.symbol,
                     side=order_side,
                     order_type="Limit",
@@ -566,7 +575,8 @@ class EntryPlanMonitor:
             return False, ""
 
         try:
-            ticker = await self.client.get_tickers(plan.symbol)
+            client = self._get_client(plan.testnet)
+            ticker = await client.get_tickers(plan.symbol)
 
             # DEBUG: проверяем символ
             ticker_symbol = ticker.get('symbol', 'UNKNOWN')
@@ -701,8 +711,9 @@ class EntryPlanMonitor:
         plan.cancel_reason = reason
 
         # Отменяем все открытые ордера (prefix: EP:{plan_id[:8]})
+        client = self._get_client(plan.testnet)
         short_plan_id = plan.plan_id[:8]
-        cancelled = await self.client.cancel_orders_by_prefix(
+        cancelled = await client.cancel_orders_by_prefix(
             symbol=plan.symbol,
             client_order_id_prefix=f"EP:{short_plan_id}"
         )
@@ -775,15 +786,16 @@ class EntryPlanMonitor:
         try:
             # Для закрытия Long нужен Sell, для Short — Buy
             close_side = "Sell" if plan.side == "Long" else "Buy"
+            client = self._get_client(plan.testnet)
 
             # Получаем instrument_info для округления
-            instrument_info = await self.client.get_instrument_info(plan.symbol)
+            instrument_info = await client.get_instrument_info(plan.symbol)
             qty_step = instrument_info.get('qtyStep', '0.001')
 
             qty_str = round_qty(plan.filled_qty, qty_step)
 
             short_plan_id = plan.plan_id[:8]
-            await self.client.place_order(
+            await client.place_order(
                 symbol=plan.symbol,
                 side=close_side,
                 order_type="Market",
@@ -818,7 +830,8 @@ class EntryPlanMonitor:
 
             try:
                 # Получить статус ордера от Bybit
-                order_info = await self.client.get_order(
+                client = self._get_client(plan.testnet)
+                order_info = await client.get_order(
                     symbol=plan.symbol,
                     order_id=order.order_id
                 )
@@ -894,9 +907,10 @@ class EntryPlanMonitor:
     async def _setup_sl_after_first_fill(self, plan: EntryPlan):
         """Установить SL после первого fill для защиты позиции"""
         try:
+            client = self._get_client(plan.testnet)
             trigger_type = "LastPrice" if plan.testnet else "MarkPrice"
 
-            await self.client.set_trading_stop(
+            await client.set_trading_stop(
                 symbol=plan.symbol,
                 stop_loss=str(plan.stop_price),
                 sl_trigger_by=trigger_type
@@ -972,8 +986,9 @@ class EntryPlanMonitor:
     async def _setup_sl_tp(self, plan: EntryPlan):
         """Установить SL и ladder TP для позиции"""
         try:
+            client = self._get_client(plan.testnet)
             # Установить SL
-            await self.client.set_trading_stop(
+            await client.set_trading_stop(
                 symbol=plan.symbol,
                 stop_loss=str(plan.stop_price),
                 sl_trigger_by="MarkPrice" if not plan.testnet else "LastPrice"
@@ -993,8 +1008,9 @@ class EntryPlanMonitor:
             return
 
         try:
+            client = self._get_client(plan.testnet)
             # Установить SL
-            await self.client.set_trading_stop(
+            await client.set_trading_stop(
                 symbol=plan.symbol,
                 stop_loss=str(plan.stop_price),
                 sl_trigger_by="MarkPrice" if not plan.testnet else "LastPrice"
@@ -1011,7 +1027,8 @@ class EntryPlanMonitor:
     async def _setup_ladder_tp(self, plan: EntryPlan, use_filled_qty: bool = False):
         """Установить ladder TP ордера"""
         try:
-            instrument_info = await self.client.get_instrument_info(plan.symbol)
+            client = self._get_client(plan.testnet)
+            instrument_info = await client.get_instrument_info(plan.symbol)
             tick_size = instrument_info.get('tickSize', '0.01')
             qty_step = instrument_info.get('qtyStep', '0.001')
 
@@ -1032,7 +1049,7 @@ class EntryPlanMonitor:
 
             if tp_levels:
                 short_plan_id = plan.plan_id[:8]
-                await self.client.place_ladder_tp(
+                await client.place_ladder_tp(
                     symbol=plan.symbol,
                     position_side=order_side,
                     tp_levels=tp_levels,
