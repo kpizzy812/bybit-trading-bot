@@ -139,8 +139,24 @@ async def show_position_detail(callback: CallbackQuery, settings_storage):
 
         position = positions[0]
 
+        # Ищем ladder TP ордера для этой позиции
+        tp_orders = []
+        try:
+            all_orders = await client.get_open_orders(symbol=symbol)
+            for o in all_orders:
+                # Ladder TP ордера: reduce_only + цена в нужном направлении
+                if o.get('reduceOnly', False):
+                    tp_orders.append({
+                        'price': float(o.get('price', 0)),
+                        'qty': o.get('qty', '0')
+                    })
+            # Сортируем по цене
+            tp_orders.sort(key=lambda x: x['price'])
+        except Exception as e:
+            logger.warning(f"Error fetching TP orders: {e}")
+
         # Формируем детальную информацию
-        text = await _format_position_detail(position)
+        text = await _format_position_detail(position, tp_orders=tp_orders)
 
         await callback.message.edit_text(
             text,
@@ -1068,8 +1084,14 @@ TP: {take_profit if take_profit else '❌ Not Set'}
     return text.strip()
 
 
-async def _format_position_detail(position: dict) -> str:
-    """Форматирование детальной информации о позиции"""
+async def _format_position_detail(position: dict, tp_orders: list = None) -> str:
+    """
+    Форматирование детальной информации о позиции.
+
+    Args:
+        position: Данные позиции от Bybit API
+        tp_orders: Список ladder TP ордеров [{'price': float, 'qty': str}]
+    """
     symbol = position.get('symbol')
     side = position.get('side')
     size = float(position.get('size', 0))
@@ -1087,9 +1109,9 @@ async def _format_position_detail(position: dict) -> str:
     except (ValueError, TypeError):
         liq_price = "N/A"
 
-    # SL/TP
-    stop_loss = position.get('stopLoss', 'None')
-    take_profit = position.get('takeProfit', 'None')
+    # SL/TP из позиции (set_trading_stop)
+    stop_loss = position.get('stopLoss', '')
+    take_profit = position.get('takeProfit', '')
 
     # ROE%
     roe = 0
@@ -1115,10 +1137,21 @@ Unrealized: ${unrealized_pnl:.2f} ({roe:+.2f}%)
 Realized: ${realized_pnl:.2f}
 
 <b>Risk Management:</b>
-SL: {stop_loss if stop_loss != 'None' else '❌ Not Set'}
-TP: {take_profit if take_profit != 'None' else '❌ Not Set'}
-
-💡 Выбери действие ниже:
+SL: {stop_loss if stop_loss else '❌ Not Set'}
 """
+
+    # Форматируем TP
+    if take_profit:
+        # TP из trading stop (одиночный)
+        text += f"TP: {take_profit}\n"
+    elif tp_orders:
+        # Ladder TP ордера
+        text += f"TP: <i>Ladder ({len(tp_orders)} levels)</i>\n"
+        for i, tp in enumerate(tp_orders, 1):
+            text += f"  🎯 TP{i}: ${tp['price']:.2f} (qty: {tp['qty']})\n"
+    else:
+        text += "TP: ❌ Not Set\n"
+
+    text += "\n💡 Выбери действие ниже:"
 
     return text.strip()
