@@ -922,6 +922,16 @@ class EntryPlanMonitor:
             # Сохраняем обновлённый план в Redis
             await self._update_plan_in_redis(plan)
 
+        # === RECOVERY: Проверяем TP для старых планов с fills но без TP ===
+        # Эта проверка нужна для планов мигрированных с tp_set=None
+        if (plan.protect_after_first_fill and
+            plan.has_fills and
+            not plan.tp_set and
+            plan.targets):
+            logger.info(f"Recovery: setting TP for plan {plan.plan_id} (migration)")
+            await self._setup_tp_after_first_fill(plan)
+            await self._notify_sl_tp_set_early(plan)
+
     async def _setup_sl_after_first_fill(self, plan: EntryPlan):
         """Установить SL после первого fill для защиты позиции"""
         try:
