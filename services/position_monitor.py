@@ -23,6 +23,9 @@ if TYPE_CHECKING:
     from services.post_sl_analyzer import PostSLAnalyzer
     from services.supervisor_client import SupervisorClient
 
+# Feedback integration
+from services.feedback import feedback_collector, feedback_client, feedback_queue
+
 logger = logging.getLogger(__name__)
 
 
@@ -381,6 +384,18 @@ class PositionMonitor:
 
         logger.info(f"Position closed for user {user_id}: {snapshot.symbol} {reason} PnL: ${pnl_usd:+.2f}")
 
+        # === SYNTRA FEEDBACK ===
+        # Отправляем feedback в Syntra для learning системы
+        if trade_id:
+            # Получаем обновлённый trade record (после update_trade_on_close)
+            updated_trade = await self.trade_logger.get_trade_by_id(
+                user_id=user_id,
+                trade_id=trade_id,
+                testnet=self.testnet
+            )
+            if updated_trade:
+                await self._send_trade_feedback(user_id, updated_trade)
+
     async def _handle_partial_close(
         self,
         user_id: int,
@@ -521,6 +536,41 @@ class PositionMonitor:
                 )
         except Exception as e:
             logger.debug(f"MAE/MFE update error for {snapshot.symbol}: {e}")
+
+    async def _send_trade_feedback(self, user_id: int, trade):
+        """
+        Отправить feedback в Syntra для learning системы.
+
+        Собирает 4 слоя телеметрии и отправляет в API.
+        При ошибке добавляет в Redis очередь для retry.
+        """
+        # Только для сделок от Syntra
+        if trade.scenario_source != "syntra" and not trade.scenario_snapshot:
+            logger.debug(f"Skip feedback: not syntra trade {trade.trade_id}")
+            return
+
+        try:
+            # Собираем feedback из TradeRecord
+            feedback = feedback_collector.collect(trade)
+
+            if not feedback:
+                logger.debug(f"Skip feedback: collector returned None for {trade.trade_id}")
+                return
+
+            # Пытаемся отправить напрямую
+            try:
+                response = await feedback_client.submit(feedback)
+                logger.info(
+                    f"Feedback sent: trade_id={trade.trade_id}, "
+                    f"duplicate={response.get('duplicate', False)}"
+                )
+            except Exception as e:
+                # Ошибка отправки — добавляем в очередь
+                logger.warning(f"Feedback submit failed, queuing: {e}")
+                await feedback_queue.enqueue(feedback)
+
+        except Exception as e:
+            logger.error(f"Feedback collection failed for trade {trade.trade_id}: {e}")
 
     async def _send_close_notification(
         self,
