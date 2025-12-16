@@ -890,9 +890,20 @@ class EntryPlanMonitor:
                         pass
 
             # === PROTECT AFTER FIRST FILL ===
-            # Ставим SL сразу после первого fill для защиты позиции
-            if plan.protect_after_first_fill and plan.has_fills and not plan.sl_set:
-                await self._setup_sl_after_first_fill(plan)
+            # Ставим SL и TP сразу после первого fill для защиты позиции
+            if plan.protect_after_first_fill and plan.has_fills:
+                # SL
+                if not plan.sl_set:
+                    await self._setup_sl_after_first_fill(plan)
+
+                # TP (первичная установка)
+                if not plan.tp_set:
+                    await self._setup_tp_after_first_fill(plan)
+                    # Уведомляем о SL+TP
+                    await self._notify_sl_tp_set_early(plan)
+                else:
+                    # TP уже есть → проверяем нужно ли обновить (qty вырос)
+                    await self._update_tp_for_new_fill(plan)
 
             # Проверить завершение плана
             if plan.is_complete:
@@ -931,23 +942,67 @@ class EntryPlanMonitor:
                 f"(filled {plan.fill_percentage:.0f}%)"
             )
 
-            # Уведомляем пользователя
-            await self._notify_sl_set_early(plan)
-
         except Exception as e:
             logger.error(f"Failed to set SL after first fill: {e}", exc_info=True)
 
-    async def _notify_sl_set_early(self, plan: EntryPlan):
-        """Уведомление об установке SL после первого fill"""
+    async def _setup_tp_after_first_fill(self, plan: EntryPlan):
+        """Установить ladder TP после первого fill"""
+        if not plan.targets:
+            return
+
         try:
+            await self._setup_ladder_tp(plan, use_filled_qty=True, update_flags=True)
+
+            logger.info(
+                f"TP set after first fill: {plan.symbol}, "
+                f"{len(plan.targets)} levels (filled_qty={plan.filled_qty:.4f})"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to set TP after first fill: {e}", exc_info=True)
+
+    async def _notify_sl_tp_set_early(self, plan: EntryPlan):
+        """Уведомление об установке SL и TP после первого fill"""
+        try:
+            side_emoji = "🟢" if plan.side == "Long" else "🔴"
+
             message = f"""
-🛡️ <b>SL установлен!</b>
+🛡️ <b>SL/TP установлены!</b>
 
-<b>{plan.symbol}</b> {plan.side.upper()}
+{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
+📊 <b>Filled:</b> {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders)})
+📦 <b>Qty:</b> {plan.filled_qty:.4f}
+
 🛑 <b>Stop:</b> ${plan.stop_price:.2f}
-📊 <b>Filled:</b> {plan.fill_percentage:.0f}%
+"""
+            if plan.targets:
+                message += f"🎯 <b>TP:</b> {len(plan.targets)} уровней\n"
+                for i, t in enumerate(plan.targets, 1):
+                    message += f"   TP{i}: ${t['price']:.2f} ({t.get('partial_close_pct', 100)}%)\n"
 
-<i>Позиция защищена. Ожидаю остальные entry ордера...</i>
+            message += "\n<i>✅ Позиция защищена. Ожидаю остальные entry ордера...</i>"
+
+            await self.bot.send_message(
+                chat_id=plan.user_id,
+                text=message.strip(),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send SL/TP notification: {e}")
+
+    async def _notify_tp_updated(self, plan: EntryPlan):
+        """Уведомление об обновлении TP после добора позиции"""
+        try:
+            side_emoji = "🟢" if plan.side == "Long" else "🔴"
+
+            message = f"""
+🔄 <b>TP обновлены!</b>
+
+{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
+📊 <b>Filled:</b> {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders)})
+📦 <b>New Qty:</b> {plan.filled_qty:.4f}
+
+<i>TP ордера пересчитаны на новый объём позиции.</i>
 """
             await self.bot.send_message(
                 chat_id=plan.user_id,
@@ -955,7 +1010,7 @@ class EntryPlanMonitor:
                 parse_mode="HTML"
             )
         except Exception as e:
-            logger.error(f"Failed to send SL notification: {e}")
+            logger.error(f"Failed to send TP updated notification: {e}")
 
     async def _log_entry_fill(self, plan: EntryPlan, order: EntryOrder):
         """Залогировать entry fill в TradeRecord"""
@@ -991,20 +1046,30 @@ class EntryPlanMonitor:
         await self.unregister_plan(plan.plan_id)
 
     async def _setup_sl_tp(self, plan: EntryPlan):
-        """Установить SL и ladder TP для позиции"""
+        """Установить SL и ladder TP для позиции (при полном завершении плана)"""
         try:
             client = self._get_client(plan.testnet)
-            # Установить SL
-            await client.set_trading_stop(
-                symbol=plan.symbol,
-                stop_loss=str(plan.stop_price),
-                sl_trigger_by="MarkPrice" if not plan.testnet else "LastPrice"
-            )
-            logger.info(f"SL set at ${plan.stop_price:.2f} for {plan.symbol}")
 
-            # Установить ladder TP
+            # SL (если ещё не установлен)
+            if not plan.sl_set:
+                await client.set_trading_stop(
+                    symbol=plan.symbol,
+                    stop_loss=str(plan.stop_price),
+                    sl_trigger_by="MarkPrice" if not plan.testnet else "LastPrice"
+                )
+                plan.sl_set = True
+                logger.info(f"SL set at ${plan.stop_price:.2f} for {plan.symbol}")
+
+            # TP: финальное обновление на полный qty
             if plan.targets:
-                await self._setup_ladder_tp(plan)
+                # Если TP уже были и qty изменился → обновляем
+                if plan.tp_set and plan.filled_qty > plan.tp_filled_qty_at_set:
+                    logger.info(f"Final TP update: qty {plan.tp_filled_qty_at_set:.4f} → {plan.filled_qty:.4f}")
+                    await self._cancel_existing_tp(plan)
+                    await self._setup_ladder_tp(plan, use_filled_qty=True, update_flags=True)
+                elif not plan.tp_set:
+                    # TP ещё не было → ставим
+                    await self._setup_ladder_tp(plan, use_filled_qty=True, update_flags=True)
 
         except Exception as e:
             logger.error(f"Error setting SL/TP: {e}", exc_info=True)
@@ -1016,23 +1081,63 @@ class EntryPlanMonitor:
 
         try:
             client = self._get_client(plan.testnet)
-            # Установить SL
-            await client.set_trading_stop(
-                symbol=plan.symbol,
-                stop_loss=str(plan.stop_price),
-                sl_trigger_by="MarkPrice" if not plan.testnet else "LastPrice"
-            )
-            logger.info(f"SL set at ${plan.stop_price:.2f} for partial position")
 
-            # Установить ladder TP (пропорционально filled_qty)
+            # SL (если ещё не установлен)
+            if not plan.sl_set:
+                await client.set_trading_stop(
+                    symbol=plan.symbol,
+                    stop_loss=str(plan.stop_price),
+                    sl_trigger_by="MarkPrice" if not plan.testnet else "LastPrice"
+                )
+                plan.sl_set = True
+                logger.info(f"SL set at ${plan.stop_price:.2f} for partial position")
+
+            # TP: финальное обновление если нужно
             if plan.targets:
-                await self._setup_ladder_tp(plan, use_filled_qty=True)
+                if plan.tp_set and plan.filled_qty != plan.tp_filled_qty_at_set:
+                    # TP были на другой qty → обновляем
+                    logger.info(f"Partial cancel: updating TP qty {plan.tp_filled_qty_at_set:.4f} → {plan.filled_qty:.4f}")
+                    await self._cancel_existing_tp(plan)
+                    await self._setup_ladder_tp(plan, use_filled_qty=True, update_flags=True)
+                elif not plan.tp_set:
+                    # TP ещё не было → ставим
+                    await self._setup_ladder_tp(plan, use_filled_qty=True, update_flags=True)
+                # Если tp_set и qty совпадает → TP уже корректные, не трогаем
 
         except Exception as e:
             logger.error(f"Error setting SL/TP for partial: {e}", exc_info=True)
 
-    async def _setup_ladder_tp(self, plan: EntryPlan, use_filled_qty: bool = False):
-        """Установить ladder TP ордера"""
+    async def _cancel_existing_tp(self, plan: EntryPlan):
+        """Отменить существующие TP ордера плана"""
+        try:
+            client = self._get_client(plan.testnet)
+            short_plan_id = plan.plan_id[:8]
+
+            cancelled = await client.cancel_orders_by_prefix(
+                symbol=plan.symbol,
+                client_order_id_prefix=f"EP:{short_plan_id}:TP"
+            )
+
+            if cancelled:
+                logger.info(f"Cancelled {len(cancelled)} existing TP orders for plan {plan.plan_id}")
+
+            return len(cancelled)
+        except Exception as e:
+            logger.error(f"Error cancelling existing TP: {e}")
+            return 0
+
+    async def _setup_ladder_tp(self, plan: EntryPlan, use_filled_qty: bool = False, update_flags: bool = True):
+        """
+        Установить ladder TP ордера.
+
+        Args:
+            plan: EntryPlan
+            use_filled_qty: Использовать filled_qty вместо total_qty
+            update_flags: Обновить флаги tp_set и tp_filled_qty_at_set
+        """
+        if not plan.targets:
+            return
+
         try:
             client = self._get_client(plan.testnet)
             instrument_info = await client.get_instrument_info(plan.symbol)
@@ -1040,7 +1145,7 @@ class EntryPlanMonitor:
             qty_step = instrument_info.get('qtyStep', '0.001')
 
             base_qty = plan.filled_qty if use_filled_qty else plan.total_qty
-            order_side = "Buy" if plan.side == "Long" else "Sell"
+            order_side = "Sell" if plan.side == "Long" else "Buy"  # TP закрывает позицию
 
             tp_levels = []
             for target in plan.targets:
@@ -1062,10 +1167,44 @@ class EntryPlanMonitor:
                     tp_levels=tp_levels,
                     client_order_id_prefix=f"EP:{short_plan_id}:TP"
                 )
-                logger.info(f"Ladder TP set: {len(tp_levels)} levels for {plan.symbol}")
+                logger.info(
+                    f"Ladder TP set: {len(tp_levels)} levels for {plan.symbol}, "
+                    f"base_qty={base_qty:.4f}"
+                )
+
+                # Обновляем флаги
+                if update_flags:
+                    plan.tp_set = True
+                    plan.tp_filled_qty_at_set = plan.filled_qty
+                    await self._update_plan_in_redis(plan)
 
         except Exception as e:
             logger.error(f"Error setting ladder TP: {e}", exc_info=True)
+
+    async def _update_tp_for_new_fill(self, plan: EntryPlan):
+        """
+        Обновить TP ордера после нового fill.
+
+        Отменяет старые TP и ставит новые на обновлённый filled_qty.
+        """
+        if not plan.targets:
+            return
+
+        # Проверяем нужно ли обновлять (qty изменился)
+        if plan.tp_set and plan.filled_qty > plan.tp_filled_qty_at_set:
+            logger.info(
+                f"Updating TP for plan {plan.plan_id}: "
+                f"old_qty={plan.tp_filled_qty_at_set:.4f} → new_qty={plan.filled_qty:.4f}"
+            )
+
+            # Отменяем старые TP
+            await self._cancel_existing_tp(plan)
+
+            # Ставим новые TP на обновлённый qty
+            await self._setup_ladder_tp(plan, use_filled_qty=True, update_flags=True)
+
+            # Уведомляем пользователя
+            await self._notify_tp_updated(plan)
 
     # ==================== Notifications ====================
 

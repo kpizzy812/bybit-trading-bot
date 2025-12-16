@@ -155,6 +155,8 @@ class EntryPlan:
 
     # Protection status (для protect_after_first_fill)
     sl_set: bool = False  # SL уже установлен на позицию
+    tp_set: bool = False  # TP ордера уже установлены
+    tp_filled_qty_at_set: float = 0.0  # filled_qty когда TP были установлены (для обновления)
 
     # Metrics
     filled_qty: float = 0.0
