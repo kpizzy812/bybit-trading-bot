@@ -1163,7 +1163,7 @@ class EntryPlanMonitor:
                 tp_qty_raw = (base_qty * partial_pct) / 100
                 tp_qty = round_qty(tp_qty_raw, qty_step, round_down=True)
 
-                if tp_qty > 0:
+                if float(tp_qty) > 0:
                     tp_levels.append({
                         'price': round_price(target['price'], tick_size),
                         'qty': tp_qty
