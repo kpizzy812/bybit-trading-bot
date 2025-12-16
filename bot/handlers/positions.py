@@ -17,7 +17,8 @@ from bot.keyboards.positions_kb import (
     get_entry_plan_cancel_confirm_kb,
     get_move_sl_confirmation_kb,
     get_close_confirmation_kb,
-    get_panic_close_all_confirmation_kb
+    get_panic_close_all_confirmation_kb,
+    get_empty_positions_kb
 )
 from bot.keyboards.main_menu import get_main_menu
 from services.bybit import BybitClient, BybitError
@@ -77,7 +78,8 @@ async def refresh_positions(callback: CallbackQuery, settings_storage, entry_pla
         if not positions and not orders and not entry_plans:
             await callback.message.edit_text(
                 "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
-                "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю"
+                "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю",
+                reply_markup=get_empty_positions_kb()
             )
             return
 
@@ -653,7 +655,8 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage, entr
         if not positions and not orders and not entry_plans:
             await callback.message.edit_text(
                 "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
-                "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю"
+                "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю",
+                reply_markup=get_empty_positions_kb()
             )
             return
 

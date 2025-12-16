@@ -355,3 +355,16 @@ def get_entry_plan_cancel_confirm_kb(plan_id: str) -> InlineKeyboardMarkup:
     )
 
     return builder.as_markup()
+
+
+def get_empty_positions_kb() -> InlineKeyboardMarkup:
+    """
+    Клавиатура для пустого списка позиций (только кнопка обновления)
+    """
+    builder = InlineKeyboardBuilder()
+
+    builder.row(
+        InlineKeyboardButton(text="🔄 Обновить", callback_data="pos_refresh")
+    )
+
+    return builder.as_markup()

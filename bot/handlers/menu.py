@@ -30,7 +30,7 @@ async def open_trade_handler(message: Message, state: FSMContext):
 @router.message(F.text == "📊 Позиции")
 async def positions_handler(message: Message, settings_storage, lock_manager, entry_plan_monitor=None):
     """Показать открытые позиции, ордера и Entry Plans"""
-    from bot.keyboards.positions_kb import get_positions_with_plans_kb
+    from bot.keyboards.positions_kb import get_positions_with_plans_kb, get_empty_positions_kb
 
     # Получаем настройки пользователя
     user_settings = await settings_storage.get_settings(message.from_user.id)
@@ -73,7 +73,7 @@ async def positions_handler(message: Message, settings_storage, lock_manager, en
             await message.answer(
                 "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
                 "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю",
-                reply_markup=get_main_menu()
+                reply_markup=get_empty_positions_kb()
             )
             return
 
