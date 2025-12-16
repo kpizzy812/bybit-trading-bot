@@ -604,6 +604,36 @@ class TradeLogger:
             f"${fill_price:.2f} x {fill_qty}, avg_entry=${target_trade.avg_entry_price:.2f}"
         )
 
+    async def cancel_trade(
+        self,
+        user_id: int,
+        trade_id: str,
+        reason: str = "plan_cancelled",
+        testnet: Optional[bool] = None
+    ):
+        """
+        Отменить сделку без fills (Entry Plan отменён до исполнения).
+
+        Args:
+            user_id: ID пользователя
+            trade_id: ID сделки
+            reason: Причина отмены
+            testnet: Режим
+        """
+        target_trade = await self.get_trade_by_id(user_id, trade_id, testnet)
+        if not target_trade:
+            logger.warning(f"Trade {trade_id} not found for cancel (user {user_id})")
+            return
+
+        target_trade.status = "cancelled"
+        target_trade.exit_reason = reason
+        target_trade.closed_at = datetime.utcnow().isoformat()
+        target_trade.pnl_usd = 0
+        target_trade.outcome = "cancelled"
+
+        await self._replace_trade(user_id, target_trade)
+        logger.info(f"Trade {trade_id} cancelled: {reason}")
+
     async def get_statistics(self, user_id: int, limit: int = 100, testnet: Optional[bool] = None) -> Dict:
         """Получить статистику по сделкам v2"""
         trades = await self.get_trades(user_id, limit=limit, testnet=testnet)

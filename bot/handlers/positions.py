@@ -1,6 +1,8 @@
 """
 Хендлеры для управления позициями
 """
+import html
+
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
@@ -103,7 +105,7 @@ async def refresh_positions(callback: CallbackQuery, settings_storage, entry_pla
     except Exception as e:
         logger.error(f"Error refreshing positions: {e}")
         await callback.message.edit_text(
-            f"❌ Ошибка при обновлении позиций:\n{str(e)}"
+            f"❌ Ошибка при обновлении позиций:\n{html.escape(str(e))}"
         )
 
 
@@ -146,7 +148,7 @@ async def show_position_detail(callback: CallbackQuery, settings_storage):
     except Exception as e:
         logger.error(f"Error showing position detail: {e}")
         await callback.message.edit_text(
-            f"❌ Ошибка при получении позиции:\n{str(e)}"
+            f"❌ Ошибка при получении позиции:\n{html.escape(str(e))}"
         )
 
 
@@ -215,7 +217,7 @@ async def partial_close_position(callback: CallbackQuery, settings_storage, trad
         logger.error(f"Error partial closing position: {e}")
         await callback.message.edit_text(
             f"❌ <b>Ошибка при закрытии позиции</b>\n\n"
-            f"{str(e)}\n\n"
+            f"{html.escape(str(e))}\n\n"
             f"Попробуй снова или обратись к главному меню"
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
@@ -319,7 +321,7 @@ async def close_position_confirmed(callback: CallbackQuery, settings_storage, tr
     except BybitError as e:
         logger.error(f"Error closing position: {e}")
         await callback.message.edit_text(
-            f"❌ <b>Ошибка при закрытии</b>\n\n{str(e)}"
+            f"❌ <b>Ошибка при закрытии</b>\n\n{html.escape(str(e))}"
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
@@ -401,7 +403,7 @@ async def move_sl_execute(message: Message, state: FSMContext, settings_storage)
         logger.error(f"Error moving SL: {e}")
         await state.clear()
         await message.answer(
-            f"❌ <b>Ошибка при перемещении SL</b>\n\n{str(e)}",
+            f"❌ <b>Ошибка при перемещении SL</b>\n\n{html.escape(str(e))}",
             reply_markup=get_main_menu()
         )
 
@@ -475,7 +477,7 @@ async def panic_close_all_execute(callback: CallbackQuery, settings_storage, tra
                 logger.info(f"Panic closed: {symbol}")
             except Exception as e:
                 logger.error(f"Error panic closing {symbol}: {e}")
-                errors.append(f"{symbol}: {str(e)}")
+                errors.append(f"{symbol}: {html.escape(str(e))}")
 
         # Результат
         result_text = "🧯 <b>Panic Close All выполнен</b>\n\n"
@@ -496,7 +498,7 @@ async def panic_close_all_execute(callback: CallbackQuery, settings_storage, tra
     except Exception as e:
         logger.error(f"Error during panic close all: {e}")
         await callback.message.edit_text(
-            f"❌ Ошибка при Panic Close:\n{str(e)}"
+            f"❌ Ошибка при Panic Close:\n{html.escape(str(e))}"
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
@@ -548,7 +550,7 @@ async def show_order_detail(callback: CallbackQuery, settings_storage):
     except Exception as e:
         logger.error(f"Error showing order detail: {e}")
         await callback.message.edit_text(
-            f"❌ Ошибка при получении ордера:\n{str(e)}"
+            f"❌ Ошибка при получении ордера:\n{html.escape(str(e))}"
         )
 
 
@@ -601,7 +603,7 @@ async def cancel_order(callback: CallbackQuery, settings_storage):
     except BybitError as e:
         logger.error(f"Error cancelling order: {e}")
         await callback.message.edit_text(
-            f"❌ <b>Ошибка при отмене ордера</b>\n\n{str(e)}"
+            f"❌ <b>Ошибка при отмене ордера</b>\n\n{html.escape(str(e))}"
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
@@ -678,7 +680,7 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage, entr
     except Exception as e:
         logger.error(f"Error going back to positions list: {e}")
         await callback.message.edit_text(
-            f"❌ Ошибка:\n{str(e)}",
+            f"❌ Ошибка:\n{html.escape(str(e))}",
             reply_markup=get_main_menu()
         )
 
@@ -713,8 +715,53 @@ async def show_entry_plan_detail(callback: CallbackQuery, entry_plan_monitor):
 
     await callback.message.edit_text(
         text,
-        reply_markup=get_entry_plan_detail_kb(plan.plan_id)
+        reply_markup=get_entry_plan_detail_kb(plan.plan_id, is_activated=plan.is_activated)
     )
+
+
+@router.callback_query(F.data.startswith("eplan_activate:"))
+async def activate_entry_plan_now(callback: CallbackQuery, entry_plan_monitor):
+    """Принудительно активировать Entry Plan (поставить лимитки сейчас)"""
+    await callback.answer("Активирую план...")
+
+    short_plan_id = callback.data.split(":")[1]
+
+    # Ищем план
+    plan = None
+    for pid, p in entry_plan_monitor.active_plans.items():
+        if pid.startswith(short_plan_id):
+            plan = p
+            break
+
+    if not plan:
+        await callback.message.edit_text("❌ Entry Plan не найден")
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+        return
+
+    if plan.is_activated:
+        await callback.message.edit_text("⚠️ План уже активирован")
+        return
+
+    try:
+        # Принудительная активация
+        await entry_plan_monitor._activate_plan(plan)
+
+        side_emoji = "🟢" if plan.side == "Long" else "🔴"
+        await callback.message.edit_text(
+            f"✅ <b>Entry Plan активирован!</b>\n\n"
+            f"{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}\n"
+            f"📊 Mode: {plan.mode}\n"
+            f"📦 Orders: {len(plan.orders)}\n\n"
+            f"🔔 Лимитки выставлены, ожидай исполнения"
+        )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+
+    except Exception as e:
+        logger.error(f"Error activating entry plan: {e}")
+        await callback.message.edit_text(
+            f"❌ Ошибка при активации:\n{html.escape(str(e))}"
+        )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
 
 @router.callback_query(F.data.startswith("eplan_cancel:"))
@@ -803,7 +850,7 @@ async def cancel_entry_plan_execute(callback: CallbackQuery, entry_plan_monitor)
     except Exception as e:
         logger.error(f"Error cancelling entry plan: {e}")
         await callback.message.edit_text(
-            f"❌ Ошибка при отмене плана:\n{str(e)}"
+            f"❌ Ошибка при отмене плана:\n{html.escape(str(e))}"
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 

@@ -747,10 +747,25 @@ class EntryPlanMonitor:
                 await self._setup_sl_tp_for_partial(plan)
                 await self._notify_plan_cancelled_with_position(plan, reason)
         else:
+            # Нет fills — отменяем сделку в trade_logger
+            await self._cancel_trade_no_fills(plan, reason)
             await self._notify_plan_cancelled(plan, reason)
 
         # Убираем из мониторинга
         await self.unregister_plan(plan.plan_id)
+
+    async def _cancel_trade_no_fills(self, plan: EntryPlan, reason: str):
+        """Отменить сделку в trade_logger когда Entry Plan отменён без fills"""
+        try:
+            await self.trade_logger.cancel_trade(
+                user_id=plan.user_id,
+                trade_id=plan.trade_id,
+                reason=reason,
+                testnet=plan.testnet
+            )
+            logger.info(f"Trade {plan.trade_id} cancelled in trade_logger: {reason}")
+        except Exception as e:
+            logger.error(f"Failed to cancel trade in trade_logger: {e}")
 
     async def _close_partial_position(self, plan: EntryPlan):
         """Закрыть частичную позицию market ордером"""

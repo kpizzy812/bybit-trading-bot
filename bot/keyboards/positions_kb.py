@@ -289,12 +289,13 @@ def get_positions_with_plans_kb(
     return builder.as_markup()
 
 
-def get_entry_plan_detail_kb(plan_id: str) -> InlineKeyboardMarkup:
+def get_entry_plan_detail_kb(plan_id: str, is_activated: bool = True) -> InlineKeyboardMarkup:
     """
     Клавиатура для управления Entry Plan
 
     Args:
         plan_id: ID плана (полный или короткий)
+        is_activated: Активирован ли план (если нет - показать кнопку активации)
 
     Returns:
         InlineKeyboardMarkup
@@ -302,6 +303,15 @@ def get_entry_plan_detail_kb(plan_id: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     short_id = plan_id[:8]
+
+    # Кнопка активации (если план ожидает)
+    if not is_activated:
+        builder.row(
+            InlineKeyboardButton(
+                text="🚀 Активировать сейчас",
+                callback_data=f"eplan_activate:{short_id}"
+            )
+        )
 
     # Отмена плана
     builder.row(
