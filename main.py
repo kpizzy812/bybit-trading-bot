@@ -52,6 +52,16 @@ logger.add(
     retention="7 days",
     compression="zip"
 )
+logger.add(
+    "errors.log",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+    level="ERROR",
+    rotation="5 MB",
+    retention="30 days",
+    compression="zip",
+    backtrace=True,
+    diagnose=True
+)
 
 # Перехватываем логи из aiogram и других библиотек
 logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
