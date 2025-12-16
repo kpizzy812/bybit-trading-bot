@@ -353,6 +353,119 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
     )
 
 
+@router.callback_query(AIScenarioStates.viewing_detail, F.data.startswith("ai:custom_risk:"))
+async def ai_custom_risk_start(callback: CallbackQuery, state: FSMContext):
+    """Начать ввод custom риска"""
+    scenario_index = int(callback.data.split(":")[2])
+
+    await state.update_data(selected_scenario_index=scenario_index)
+    await state.set_state(AIScenarioStates.entering_custom_risk)
+
+    await callback.message.edit_text(
+        "💰 <b>Custom Risk</b>\n\n"
+        "Введи сумму риска в USD (от 1 до 500):\n\n"
+        "Например: <code>15</code> или <code>75.5</code>",
+        reply_markup=ai_scenarios_kb.get_custom_risk_cancel_keyboard(scenario_index)
+    )
+
+    await callback.answer()
+
+
+@router.message(AIScenarioStates.entering_custom_risk)
+async def ai_custom_risk_process(message: Message, state: FSMContext, settings_storage):
+    """Обработать введённый пользователем custom риск"""
+    user_id = message.from_user.id
+
+    try:
+        # Парсим риск
+        risk_text = message.text.strip().replace(",", ".").replace("$", "")
+        custom_risk = float(risk_text)
+
+        # Валидация
+        if custom_risk <= 0:
+            await message.answer("⚠️ Риск должен быть положительным числом!")
+            return
+
+        if custom_risk < 1:
+            await message.answer("⚠️ Минимальный риск: $1")
+            return
+
+        if custom_risk > 500:
+            await message.answer("⚠️ Максимальный риск: $500")
+            return
+
+        # Получаем данные
+        data = await state.get_data()
+        scenarios = data.get("scenarios", [])
+        scenario_index = data.get("selected_scenario_index", 0)
+        scenario = scenarios[scenario_index]
+        symbol = data.get("symbol", "BTCUSDT")
+
+        settings = await settings_storage.get_settings(user_id)
+        leverage = settings.default_leverage
+
+        # === CONFIDENCE-BASED RISK SCALING ===
+        confidence = scenario.get("confidence", 0.5)
+
+        adjusted_risk, multiplier = calculate_confidence_adjusted_risk(
+            base_risk=custom_risk,
+            confidence=confidence,
+            scaling_enabled=settings.confidence_risk_scaling
+        )
+
+        # Сохраняем в state
+        await state.update_data(
+            base_risk_usd=custom_risk,
+            risk_usd=adjusted_risk,
+            risk_multiplier=multiplier,
+            leverage=leverage
+        )
+        await state.set_state(AIScenarioStates.confirmation)
+
+        # Удаляем сообщение с вводом
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        # Показываем подтверждение
+        await show_trade_confirmation_message(
+            message,
+            scenario,
+            symbol,
+            adjusted_risk,
+            leverage,
+            base_risk=custom_risk,
+            multiplier=multiplier,
+            scaling_enabled=settings.confidence_risk_scaling
+        )
+
+        logger.info(f"User {user_id} set custom risk ${custom_risk:.2f} → ${adjusted_risk:.2f}")
+
+    except ValueError:
+        await message.answer(
+            "⚠️ Неверный формат!\n\n"
+            "Введи число, например: <code>25</code> или <code>15.5</code>"
+        )
+
+
+@router.callback_query(AIScenarioStates.entering_custom_risk, F.data.startswith("ai:cancel_custom:"))
+async def ai_custom_risk_cancel(callback: CallbackQuery, state: FSMContext):
+    """Отменить ввод custom риска и вернуться к деталям сценария"""
+    scenario_index = int(callback.data.split(":")[2])
+
+    data = await state.get_data()
+    scenarios = data.get("scenarios", [])
+    scenario = scenarios[scenario_index]
+
+    await state.set_state(AIScenarioStates.viewing_detail)
+
+    # Показываем детали сценария
+    await show_scenario_detail(callback.message, scenario, scenario_index)
+
+    await callback.answer("Отменено")
+
+
 @router.callback_query(AIScenarioStates.viewing_detail, F.data.startswith("ai:trade:"))
 async def ai_trade_with_risk(callback: CallbackQuery, state: FSMContext, settings_storage):
     """Пользователь выбрал риск - показать подтверждение с confidence scaling"""

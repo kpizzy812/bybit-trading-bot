@@ -140,6 +140,26 @@ def get_edit_sl_cancel_keyboard(scenario_index: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_custom_risk_cancel_keyboard(scenario_index: int) -> InlineKeyboardMarkup:
+    """
+    Клавиатура для отмены ввода custom риска
+
+    Args:
+        scenario_index: Индекс сценария
+
+    Returns:
+        InlineKeyboardMarkup с кнопкой отмены
+    """
+    builder = InlineKeyboardBuilder()
+
+    builder.button(
+        text="❌ Отмена",
+        callback_data=f"ai:cancel_custom:{scenario_index}"
+    )
+
+    return builder.as_markup()
+
+
 def get_confirm_trade_keyboard(scenario_index: int, risk_usd: float) -> InlineKeyboardMarkup:
     """
     Клавиатура подтверждения сделки на основе сценария
