@@ -1151,12 +1151,16 @@ class EntryPlanMonitor:
         try:
             client = self._get_client(plan.testnet)
             instrument_info = await client.get_instrument_info(plan.symbol)
-            tick_size = instrument_info.get('tickSize', '0.01')
-            qty_step = instrument_info.get('qtyStep', '0.001')
-            min_order_qty = float(instrument_info.get('minOrderQty', '0.001'))
+            lot_size = instrument_info.get('lotSizeFilter', {})
+            price_filter = instrument_info.get('priceFilter', {})
+            tick_size = price_filter.get('tickSize', '0.01')
+            qty_step = lot_size.get('qtyStep', '0.001')
+            min_order_qty = float(lot_size.get('minOrderQty', '0.001'))
 
             base_qty = plan.filled_qty if use_filled_qty else plan.total_qty
             position_side = "Buy" if plan.side == "Long" else "Sell"  # Сторона позиции
+
+            logger.info(f"Setting ladder TP: base_qty={base_qty}, min_order_qty={min_order_qty}, qty_step={qty_step}")
 
             tp_levels = []
             skipped_qty = 0.0  # Накопленный qty от пропущенных уровней
