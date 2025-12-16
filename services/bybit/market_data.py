@@ -21,8 +21,23 @@ class MarketDataMixin:
             if not result.get('list'):
                 raise BybitError(f"Symbol {symbol} not found")
 
-            return result['list'][0]
+            ticker = result['list'][0]
 
+            # CRITICAL: Проверяем что Bybit вернул правильный символ
+            returned_symbol = ticker.get('symbol', '')
+            if returned_symbol != symbol:
+                logger.error(
+                    f"SYMBOL MISMATCH in get_tickers! "
+                    f"requested={symbol}, returned={returned_symbol}"
+                )
+                raise BybitError(
+                    f"Symbol mismatch: requested {symbol}, got {returned_symbol}"
+                )
+
+            return ticker
+
+        except BybitError:
+            raise
         except Exception as e:
             logger.error(f"Error getting tickers for {symbol}: {e}")
             raise BybitError(f"Failed to get price: {str(e)}")
@@ -49,8 +64,23 @@ class MarketDataMixin:
             if not result.get('list'):
                 raise BybitError(f"Symbol {symbol} not found")
 
-            return result['list'][0]
+            instrument = result['list'][0]
 
+            # Проверяем что вернулся правильный символ
+            returned_symbol = instrument.get('symbol', '')
+            if returned_symbol != symbol:
+                logger.error(
+                    f"SYMBOL MISMATCH in get_instrument_info! "
+                    f"requested={symbol}, returned={returned_symbol}"
+                )
+                raise BybitError(
+                    f"Symbol mismatch: requested {symbol}, got {returned_symbol}"
+                )
+
+            return instrument
+
+        except BybitError:
+            raise
         except Exception as e:
             logger.error(f"Error getting instrument info for {symbol}: {e}")
             raise BybitError(f"Failed to get instrument info: {str(e)}")

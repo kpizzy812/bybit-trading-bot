@@ -10,6 +10,10 @@ Quick execution flow: выбор сценария → выбор риска → 
 - Ladder TP support
 - Entry Plan support (ladder entry с несколькими ордерами)
 """
+import html
+import math
+import uuid
+
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
@@ -93,7 +97,8 @@ def parse_entry_plan(
     leverage: int,
     testnet: bool,
     qty_step: str = "0.001",
-    tick_size: str = "0.01"
+    tick_size: str = "0.01",
+    current_price: float = 0.0
 ) -> Optional[EntryPlan]:
     """
     Распарсить entry_plan из AI сценария с Risk-on-plan моделью.
@@ -152,51 +157,205 @@ def parse_entry_plan(
         logger.error(f"Invalid stop distance: P_avg={p_avg}, SL={stop_price}")
         return None
 
-    q_total = risk_usd / stop_distance
-
-    # Округляем до qty_step
+    q_total_raw = risk_usd / stop_distance
     qty_step_float = float(qty_step)
-    q_total = round(q_total / qty_step_float) * qty_step_float
+    min_qty = qty_step_float  # Минимальный qty = один шаг
+
+    # Округляем q_total вниз (floor) чтобы не превысить риск
+    q_total = math.floor(q_total_raw / qty_step_float) * qty_step_float
 
     logger.info(
         f"Risk-on-plan: P_avg=${p_avg:.2f}, SL=${stop_price:.2f}, "
         f"distance=${stop_distance:.2f}, Q_total={q_total:.6f}"
     )
 
-    # === Создаём ордера с пропорциональным qty ===
+    # === Auto-downgrade: проверяем достаточно ли qty для ladder ===
+    n_orders = len(orders_data)
+    min_total_for_ladder = min_qty * n_orders
+
+    effective_mode = entry_plan_data.get('mode', 'ladder')
+    downgrade_reason = None
+
+    if q_total < min_qty:
+        # Даже для одного ордера не хватает
+        logger.warning(f"Q_total {q_total} < min_qty {min_qty}, cannot create plan")
+        return None
+
+    if q_total < min_total_for_ladder and n_orders > 1:
+        # Автоматический downgrade ladder → single или меньше ордеров
+        max_possible_orders = int(q_total / min_qty)
+
+        if max_possible_orders == 0:
+            logger.warning(f"Cannot create any orders with Q_total={q_total}")
+            return None
+        elif max_possible_orders == 1:
+            # Downgrade to single - выбираем лучший ордер (ближайший к поддержке для long)
+            effective_mode = "single"
+            downgrade_reason = f"min_qty_constraint: {n_orders}→1 orders"
+            # Для long берём самый нижний, для short - самый верхний
+            if side.lower() == "long":
+                best_order = min(orders_data, key=lambda x: x['price'])
+            else:
+                best_order = max(orders_data, key=lambda x: x['price'])
+            orders_data = [{'price': best_order['price'], 'size_pct': 100,
+                          'tag': best_order.get('tag', 'E1'),
+                          'source_level': best_order.get('source_level', '')}]
+            n_orders = 1
+            logger.info(f"Auto-downgrade: ladder→single, best price=${best_order['price']}")
+        else:
+            # Можем использовать несколько ордеров, но не все
+            effective_mode = "ladder"
+            downgrade_reason = f"min_qty_constraint: {n_orders}→{max_possible_orders} orders"
+            # Оставляем лучшие ордера
+            if side.lower() == "long":
+                sorted_orders = sorted(orders_data, key=lambda x: x['price'])
+            else:
+                sorted_orders = sorted(orders_data, key=lambda x: x['price'], reverse=True)
+            orders_data = sorted_orders[:max_possible_orders]
+            # Перераспределяем веса равномерно
+            new_pct = 100 / max_possible_orders
+            for od in orders_data:
+                od['size_pct'] = new_pct
+            n_orders = max_possible_orders
+            logger.info(f"Auto-downgrade: {len(sorted_orders)}→{max_possible_orders} orders")
+
+    # === Создаём ордера с правильным округлением ===
+    # Используем floor для каждого qty, потом добавляем остаток
     orders = []
+    allocated_qty = 0.0
+
     for i, order_data in enumerate(orders_data):
         weight = order_data['size_pct'] / 100
-        order_qty = q_total * weight
+        order_qty_raw = q_total * weight
+        # Floor округление чтобы сумма не превысила q_total
+        order_qty = math.floor(order_qty_raw / qty_step_float) * qty_step_float
+        # Гарантируем минимум min_qty для каждого ордера
+        order_qty = max(order_qty, min_qty)
 
-        # Округляем qty
-        order_qty = round(order_qty / qty_step_float) * qty_step_float
+        orders.append({
+            'price': order_data['price'],
+            'size_pct': order_data['size_pct'],
+            'qty': order_qty,
+            'order_type': order_data.get('type', 'limit'),
+            'tag': order_data.get('tag', f"E{i+1}"),
+            'source_level': order_data.get('source_level', '')
+        })
+        allocated_qty += order_qty
 
-        orders.append(EntryOrder(
-            price=order_data['price'],
-            size_pct=order_data['size_pct'],
-            qty=order_qty,
-            order_type=order_data.get('type', 'limit'),
-            tag=order_data.get('tag', f"E{i+1}"),
-            source_level=order_data.get('source_level', '')
+    # Если выделили больше чем q_total (из-за min_qty constraint), урезаем
+    if allocated_qty > q_total and len(orders) > 1:
+        # Пересчитываем q_total под фактическое распределение
+        q_total = allocated_qty
+        logger.warning(f"Q_total adjusted to {q_total} due to min_qty constraints")
+
+    # Добавляем остаток в средний ордер (или первый если один)
+    remainder = q_total - allocated_qty
+    if remainder >= qty_step_float and orders:
+        middle_idx = len(orders) // 2
+        orders[middle_idx]['qty'] += math.floor(remainder / qty_step_float) * qty_step_float
+        logger.debug(f"Added remainder {remainder:.6f} to order {middle_idx}")
+
+    # Конвертируем в EntryOrder объекты
+    entry_orders = []
+    for order_dict in orders:
+        entry_orders.append(EntryOrder(
+            price=order_dict['price'],
+            size_pct=order_dict['size_pct'],
+            qty=order_dict['qty'],
+            order_type=order_dict['order_type'],
+            tag=order_dict['tag'],
+            source_level=order_dict['source_level']
         ).to_dict())
+
+    # Пересчитываем фактический total_qty
+    actual_total_qty = sum(o['qty'] for o in entry_orders)
+
+    if downgrade_reason:
+        logger.info(f"Entry plan downgraded: {downgrade_reason}")
 
     # Парсим activation
     activation = entry_plan_data.get('activation', {})
 
+    # === EXECUTION NORMALIZER: Smart Activation Override ===
+    # LLM отдаёт "намерение", система решает как исполнять
+    original_activation = activation.copy()
+    override_reason = None
+
+    activation_type = activation.get('type', 'immediate')
+    activation_level = activation.get('level')
+
+    # Получаем границы entry zone
+    entry_prices = [o['price'] for o in orders_data]
+    entry_max = max(entry_prices) if entry_prices else 0
+    entry_min = min(entry_prices) if entry_prices else 0
+
+    if activation_type == 'touch' and activation_level and current_price > 0:
+        # === Правило №1: Context-aware activation ===
+        # Если мы уже в зоне или ниже — ставим лимитки сразу
+
+        if side.lower() == 'long':
+            # Long ladder: если current_price < entry_max → price_below
+            if current_price < activation_level:
+                activation = {
+                    'type': 'price_below',
+                    'level': activation_level,
+                    'max_distance_pct': activation.get('max_distance_pct', 0.5)
+                }
+                override_reason = f"dip_buy_context: price ${current_price:.2f} < level ${activation_level:.2f}"
+                logger.info(
+                    f"Activation override: touch→price_below @ ${activation_level:.2f} "
+                    f"(current ${current_price:.2f}, reason: {override_reason})"
+                )
+
+        elif side.lower() == 'short':
+            # Short ladder: если current_price > entry_min → price_above
+            if current_price > activation_level:
+                activation = {
+                    'type': 'price_above',
+                    'level': activation_level,
+                    'max_distance_pct': activation.get('max_distance_pct', 0.5)
+                }
+                override_reason = f"rally_sell_context: price ${current_price:.2f} > level ${activation_level:.2f}"
+                logger.info(
+                    f"Activation override: touch→price_above @ ${activation_level:.2f} "
+                    f"(current ${current_price:.2f}, reason: {override_reason})"
+                )
+
+        # === Правило №2: Safety override для парадоксов ===
+        # Если все entry prices по одну сторону от activation, а цена далеко — immediate
+        if not override_reason:
+            if side.lower() == 'long' and all(p < activation_level for p in entry_prices):
+                # Все entries ниже activation, а цена ещё ниже → нонсенс ждать touch
+                if current_price < entry_min:
+                    activation = {'type': 'immediate'}
+                    override_reason = f"nonsensical_activation: all entries below activation, price below entries"
+                    logger.info(f"Activation safety override: touch→immediate ({override_reason})")
+
+            elif side.lower() == 'short' and all(p > activation_level for p in entry_prices):
+                if current_price > entry_max:
+                    activation = {'type': 'immediate'}
+                    override_reason = f"nonsensical_activation: all entries above activation, price above entries"
+                    logger.info(f"Activation safety override: touch→immediate ({override_reason})")
+
+    # Логируем override для фидбека LLM
+    if override_reason:
+        logger.info(
+            f"Activation normalized: original={original_activation}, "
+            f"effective={activation}, reason={override_reason}"
+        )
+
     # Парсим targets
     targets = scenario.get('targets', [])
 
-    import uuid
     plan = EntryPlan(
         plan_id=str(uuid.uuid4()),
         trade_id=trade_id,
         user_id=user_id,
         symbol=symbol,
         side=side,
-        mode=entry_plan_data.get('mode', 'ladder'),
-        orders=orders,
-        total_qty=q_total,
+        mode=effective_mode,
+        orders=entry_orders,
+        total_qty=actual_total_qty,
         activation_type=activation.get('type', 'immediate'),
         activation_level=activation.get('level'),
         max_distance_pct=activation.get('max_distance_pct', 0.5),
@@ -209,9 +368,10 @@ def parse_entry_plan(
         testnet=testnet
     )
 
+    downgrade_info = f" (downgraded: {downgrade_reason})" if downgrade_reason else ""
     logger.info(
-        f"Parsed entry_plan: {symbol} {side}, mode={plan.mode}, "
-        f"{len(orders)} orders, Q_total={q_total:.6f}, P_avg=${p_avg:.2f}"
+        f"Parsed entry_plan: {symbol} {side}, mode={effective_mode}, "
+        f"{len(entry_orders)} orders, Q_total={actual_total_qty:.6f}, P_avg=${p_avg:.2f}{downgrade_info}"
     )
 
     return plan
@@ -319,7 +479,7 @@ async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings
     except SyntraAPIError as e:
         logger.error(f"Syntra API error: {e}")
         await callback.message.edit_text(
-            f"❌ <b>Ошибка Syntra AI:</b>\n\n{str(e)}\n\n"
+            f"❌ <b>Ошибка Syntra AI:</b>\n\n{html.escape(str(e))}\n\n"
             f"Проверь, что Syntra AI запущен и доступен по адресу:\n"
             f"<code>{config.SYNTRA_API_URL}</code>",
             reply_markup=ai_scenarios_kb.get_symbols_keyboard()
@@ -329,7 +489,7 @@ async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings
     except Exception as e:
         logger.error(f"Unexpected error: {e}", exc_info=True)
         await callback.message.edit_text(
-            f"❌ <b>Неожиданная ошибка:</b>\n\n{str(e)}",
+            f"❌ <b>Неожиданная ошибка:</b>\n\n{html.escape(str(e))}",
             reply_markup=ai_scenarios_kb.get_symbols_keyboard()
         )
         await state.set_state(AIScenarioStates.choosing_symbol)
@@ -953,22 +1113,18 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 
         in_zone = entry_min <= current_price <= entry_max
 
+        # Определяем fallback order_type (используется только если нет entry_plan)
         if in_zone:
-            # Цена в зоне - используем Market order
             order_type = "Market"
             entry_price = current_price
-            logger.info(f"Price ${current_price:.2f} in entry zone ${entry_min:.2f}-${entry_max:.2f} → Market order")
+            logger.debug(f"Zone check: ${current_price:.2f} in zone ${entry_min:.2f}-${entry_max:.2f}")
         else:
-            # Цена вне зоны - используем Limit order на границе
             order_type = "Limit"
             if bias == "long":
-                # Long: ждём снижения цены до верхней границы зоны
                 entry_price = entry_max
-                logger.info(f"Price ${current_price:.2f} above zone ${entry_min:.2f}-${entry_max:.2f} → Limit order at ${entry_price:.2f}")
             else:
-                # Short: ждём роста цены до нижней границы зоны
                 entry_price = entry_min
-                logger.info(f"Price ${current_price:.2f} below zone ${entry_min:.2f}-${entry_max:.2f} → Limit order at ${entry_price:.2f}")
+            logger.debug(f"Zone check: ${current_price:.2f} outside zone → fallback entry ${entry_price:.2f}")
 
         # Рассчитать позицию
         position_calc = await risk_calc.calculate_position(
@@ -1008,7 +1164,6 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         await bybit.set_leverage(symbol, leverage)
 
         # Разместить ордер (Market или Limit)
-        import uuid
         trade_id = str(uuid.uuid4())
 
         # ===== ПРОВЕРКА ENTRY_PLAN (LADDER ENTRY) =====
@@ -1027,7 +1182,8 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
             leverage=leverage,
             testnet=testnet_mode,
             qty_step=qty_step,
-            tick_size=tick_size
+            tick_size=tick_size,
+            current_price=current_price
         )
 
         if entry_plan and entry_plan_monitor:
@@ -1399,7 +1555,7 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
     except Exception as e:
         logger.error(f"AI trade execution error: {e}", exc_info=True)
         await callback.message.edit_text(
-            f"❌ <b>Ошибка выполнения:</b>\n\n{str(e)}",
+            f"❌ <b>Ошибка выполнения:</b>\n\n{html.escape(str(e))}",
             reply_markup=None
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
