@@ -6,6 +6,7 @@ Entry Plan Monitor
 Хранит планы в Redis для персистентности.
 """
 import asyncio
+import html
 import json
 import logging
 from typing import Dict, Optional, List
@@ -1163,7 +1164,7 @@ class EntryPlanMonitor:
 <b>{plan.symbol}</b> {plan.side.upper()}
 📋 Mode: {plan.mode}
 
-<b>Reason:</b> {reason}
+<b>Reason:</b> {html.escape(reason)}
 
 <i>Все ордера отменены. Позиция не открыта.</i>
 """
@@ -1186,7 +1187,7 @@ class EntryPlanMonitor:
 
 {side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
 
-<b>Reason:</b> {reason}
+<b>Reason:</b> {html.escape(reason)}
 
 📊 <b>Filled:</b> {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders)})
 ⚡ <b>Avg Entry:</b> ${plan.avg_entry_price:.2f}
@@ -1215,13 +1216,13 @@ class EntryPlanMonitor:
 
 {side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
 
-<b>Reason:</b> {reason}
+<b>Reason:</b> {html.escape(reason)}
 
 📊 <b>Filled:</b> {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders)})
 ⚡ <b>Avg Entry:</b> ${plan.avg_entry_price:.2f}
 📦 <b>Qty:</b> {plan.filled_qty:.4f}
 
-<i>🔄 Позиция закрыта market (fill < {plan.min_fill_pct_to_keep:.0f}%)</i>
+<i>🔄 Позиция закрыта market (fill &lt; {plan.min_fill_pct_to_keep:.0f}%)</i>
 """
 
             await self.bot.send_message(
