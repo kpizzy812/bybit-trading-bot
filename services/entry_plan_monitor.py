@@ -1153,15 +1153,26 @@ class EntryPlanMonitor:
             instrument_info = await client.get_instrument_info(plan.symbol)
             tick_size = instrument_info.get('tickSize', '0.01')
             qty_step = instrument_info.get('qtyStep', '0.001')
+            min_order_qty = float(instrument_info.get('minOrderQty', '0.001'))
 
             base_qty = plan.filled_qty if use_filled_qty else plan.total_qty
-            order_side = "Sell" if plan.side == "Long" else "Buy"  # TP закрывает позицию
+            position_side = "Buy" if plan.side == "Long" else "Sell"  # Сторона позиции
 
             tp_levels = []
+            skipped_qty = 0.0  # Накопленный qty от пропущенных уровней
+
             for target in plan.targets:
                 partial_pct = target.get('partial_close_pct', 100)
-                tp_qty_raw = (base_qty * partial_pct) / 100
+                tp_qty_raw = (base_qty * partial_pct) / 100 + skipped_qty
                 tp_qty = round_qty(tp_qty_raw, qty_step, round_down=True)
+
+                if float(tp_qty) < min_order_qty:
+                    # Qty слишком маленький — накапливаем для следующего уровня
+                    skipped_qty = tp_qty_raw
+                    logger.debug(f"TP level skipped (qty {tp_qty} < min {min_order_qty}), accumulating...")
+                    continue
+
+                skipped_qty = 0.0  # Сбрасываем после успешного добавления
 
                 if float(tp_qty) > 0:
                     tp_levels.append({
@@ -1169,11 +1180,18 @@ class EntryPlanMonitor:
                         'qty': tp_qty
                     })
 
+            # Если остался skipped_qty после всех уровней — добавляем к последнему TP
+            if skipped_qty > 0 and tp_levels:
+                last_tp = tp_levels[-1]
+                new_qty = float(last_tp['qty']) + skipped_qty
+                last_tp['qty'] = round_qty(new_qty, qty_step, round_down=True)
+                logger.info(f"Added remaining {skipped_qty:.4f} to last TP level")
+
             if tp_levels:
                 short_plan_id = plan.plan_id[:8]
                 await client.place_ladder_tp(
                     symbol=plan.symbol,
-                    position_side=order_side,
+                    position_side=position_side,
                     tp_levels=tp_levels,
                     client_order_id_prefix=f"EP:{short_plan_id}:TP"
                 )
