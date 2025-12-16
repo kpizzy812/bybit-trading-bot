@@ -15,8 +15,8 @@ class TradingStopMixin:
         symbol: str,
         stop_loss: Optional[str] = None,
         take_profit: Optional[str] = None,
-        sl_trigger_by: str = "MarkPrice",
-        tp_trigger_by: str = "MarkPrice"
+        sl_trigger_by: Optional[str] = None,  # Auto: LastPrice on testnet, MarkPrice on mainnet
+        tp_trigger_by: Optional[str] = None   # Auto: LastPrice on testnet, MarkPrice on mainnet
     ):
         """
         Атомарно обновить SL/TP на позицию с сохранением существующих значений
@@ -72,14 +72,18 @@ class TradingStopMixin:
                 'tpslMode': 'Full',
             }
 
+            # На testnet используем LastPrice (Mark Price там часто битый)
+            # На mainnet используем MarkPrice (более стабильный)
+            default_trigger = "LastPrice" if self.testnet else "MarkPrice"
+
             # Устанавливаем оба значения (или очищаем, если пустые)
             if final_sl:
                 params['stopLoss'] = final_sl
-                params['slTriggerBy'] = sl_trigger_by
+                params['slTriggerBy'] = sl_trigger_by or default_trigger
 
             if final_tp:
                 params['takeProfit'] = final_tp
-                params['tpTriggerBy'] = tp_trigger_by
+                params['tpTriggerBy'] = tp_trigger_by or default_trigger
 
             response = self.client.set_trading_stop(**params)
             result = self._handle_response(response)
@@ -115,8 +119,8 @@ class TradingStopMixin:
         symbol: str,
         stop_loss: Optional[str] = None,
         take_profit: Optional[str] = None,
-        sl_trigger_by: str = "MarkPrice",
-        tp_trigger_by: str = "MarkPrice"
+        sl_trigger_by: Optional[str] = None,
+        tp_trigger_by: Optional[str] = None
     ):
         """
         Установить SL/TP на позицию
@@ -129,10 +133,13 @@ class TradingStopMixin:
         Args:
             stop_loss: Цена стоп-лосса
             take_profit: Цена тейк-профита
-            sl_trigger_by: "MarkPrice" или "LastPrice"
-            tp_trigger_by: "MarkPrice" или "LastPrice"
+            sl_trigger_by: "MarkPrice" или "LastPrice" (auto on None)
+            tp_trigger_by: "MarkPrice" или "LastPrice" (auto on None)
         """
         try:
+            # На testnet используем LastPrice (Mark Price там часто битый)
+            default_trigger = "LastPrice" if self.testnet else "MarkPrice"
+
             params = {
                 'category': config.BYBIT_CATEGORY,
                 'symbol': symbol,
@@ -142,11 +149,11 @@ class TradingStopMixin:
 
             if stop_loss:
                 params['stopLoss'] = stop_loss
-                params['slTriggerBy'] = sl_trigger_by
+                params['slTriggerBy'] = sl_trigger_by or default_trigger
 
             if take_profit:
                 params['takeProfit'] = take_profit
-                params['tpTriggerBy'] = tp_trigger_by
+                params['tpTriggerBy'] = tp_trigger_by or default_trigger
 
             response = self.client.set_trading_stop(**params)
             self._handle_response(response)

@@ -23,8 +23,8 @@ class OrdersMixin:
         close_on_trigger: bool = False,
         stop_loss: Optional[str] = None,
         take_profit: Optional[str] = None,
-        sl_trigger_by: str = "MarkPrice",
-        tp_trigger_by: str = "MarkPrice",
+        sl_trigger_by: Optional[str] = None,  # Auto: LastPrice on testnet, MarkPrice on mainnet
+        tp_trigger_by: Optional[str] = None,  # Auto: LastPrice on testnet, MarkPrice on mainnet
         time_in_force: Optional[str] = None,
         post_only: Optional[bool] = None
     ) -> Dict:
@@ -78,13 +78,17 @@ class OrdersMixin:
                 params['postOnlyOrder'] = post_only
 
             # SL/TP для ордера (будет активирован при исполнении)
+            # На testnet используем LastPrice (Mark Price там часто битый)
+            # На mainnet используем MarkPrice (более стабильный)
+            default_trigger = "LastPrice" if self.testnet else "MarkPrice"
+
             if stop_loss:
                 params['stopLoss'] = stop_loss
-                params['slTriggerBy'] = sl_trigger_by
+                params['slTriggerBy'] = sl_trigger_by or default_trigger
 
             if take_profit:
                 params['takeProfit'] = take_profit
-                params['tpTriggerBy'] = tp_trigger_by
+                params['tpTriggerBy'] = tp_trigger_by or default_trigger
 
             response = self.client.place_order(**params)
             result = self._handle_response(response)
