@@ -142,7 +142,7 @@ class EntryPlanMonitor:
     # ==================== Activation ====================
 
     async def _check_activation(self, plan: EntryPlan):
-        """Проверить условия активации плана"""
+        """Проверить условия активации плана с Direction sanity check"""
         try:
             ticker = await self.client.get_tickers(plan.symbol)
             current_price = float(ticker.get('markPrice', 0))
@@ -150,15 +150,20 @@ class EntryPlanMonitor:
             if not current_price:
                 return
 
-            should_activate = self._evaluate_activation(
+            should_activate, reject_reason = self._evaluate_activation(
                 activation_type=plan.activation_type,
                 activation_level=plan.activation_level,
                 current_price=current_price,
-                max_distance_pct=plan.max_distance_pct
+                max_distance_pct=plan.max_distance_pct,
+                side=plan.side
             )
 
             if should_activate:
                 await self._activate_plan(plan)
+            elif reject_reason:
+                # Direction sanity failed — отменяем план
+                logger.warning(f"Plan {plan.plan_id} rejected: {reject_reason}")
+                await self._cancel_plan(plan, f"direction_sanity: {reject_reason}")
 
         except Exception as e:
             logger.error(f"Error checking activation for plan {plan.plan_id}: {e}")
@@ -168,26 +173,60 @@ class EntryPlanMonitor:
         activation_type: str,
         activation_level: Optional[float],
         current_price: float,
-        max_distance_pct: float
-    ) -> bool:
-        """Оценить условие активации"""
+        max_distance_pct: float,
+        side: str = None
+    ) -> tuple[bool, str]:
+        """
+        Оценить условие активации с Direction sanity check.
+
+        Direction sanity:
+        - Long план на 95200, цена уже 96000 → reject (цена ушла вверх)
+        - Short план на 95200, цена уже 94000 → reject (цена ушла вниз)
+
+        Returns:
+            (should_activate, reject_reason)
+        """
         if activation_type == "immediate":
-            return True
+            return True, ""
 
         if not activation_level:
-            return True  # Нет уровня = сразу активируем
+            return True, ""  # Нет уровня = сразу активируем
 
+        # === DIRECTION SANITY CHECK ===
+        # Проверяем, что цена не ушла слишком далеко в "неправильном" направлении
+        if side:
+            distance_pct = (current_price - activation_level) / activation_level * 100
+
+            if side == "Long":
+                # Для Long: цена не должна быть выше activation_level на > max_distance_pct
+                # (иначе план устарел — цена ушла вверх)
+                if distance_pct > max_distance_pct:
+                    return False, f"price_moved_above (current ${current_price:.2f} > level ${activation_level:.2f})"
+
+            elif side == "Short":
+                # Для Short: цена не должна быть ниже activation_level на > max_distance_pct
+                # (иначе план устарел — цена ушла вниз)
+                if distance_pct < -max_distance_pct:
+                    return False, f"price_moved_below (current ${current_price:.2f} < level ${activation_level:.2f})"
+
+        # === ACTIVATION CONDITIONS ===
         if activation_type == "touch":
             distance_pct = abs(current_price - activation_level) / activation_level * 100
-            return distance_pct <= max_distance_pct
+            if distance_pct <= max_distance_pct:
+                return True, ""
+            return False, ""
 
         if activation_type == "price_above":
-            return current_price >= activation_level
+            if current_price >= activation_level:
+                return True, ""
+            return False, ""
 
         if activation_type == "price_below":
-            return current_price <= activation_level
+            if current_price <= activation_level:
+                return True, ""
+            return False, ""
 
-        return False
+        return False, ""
 
     async def _activate_plan(self, plan: EntryPlan):
         """Активировать план и разместить все entry ордера"""
@@ -206,6 +245,9 @@ class EntryPlanMonitor:
         order_side = "Buy" if plan.side == "Long" else "Sell"
         placed_count = 0
 
+        # Короткий ID для prefix (Bybit limit = 36 chars)
+        short_plan_id = plan.plan_id[:8]
+
         for i, order_dict in enumerate(plan.orders):
             order = EntryOrder.from_dict(order_dict)
 
@@ -214,6 +256,11 @@ class EntryPlanMonitor:
                 price_str = round_price(order.price, tick_size)
                 qty_str = round_qty(order.qty, qty_step)
 
+                # Формируем client_order_id: EP:{plan_id}:{tag}
+                # Максимум 36 символов: "EP:" (3) + plan_id (8) + ":" (1) + tag (до 24)
+                tag = order.tag or f"E{i+1}"
+                client_id = f"EP:{short_plan_id}:{tag}"[:36]
+
                 # Размещаем ордер
                 placed_order = await self.client.place_order(
                     symbol=plan.symbol,
@@ -221,7 +268,7 @@ class EntryPlanMonitor:
                     order_type="Limit",
                     qty=qty_str,
                     price=price_str,
-                    client_order_id=f"{plan.plan_id[:20]}_E{i+1}"
+                    client_order_id=client_id
                 )
 
                 # Обновляем статус ордера
@@ -231,7 +278,8 @@ class EntryPlanMonitor:
 
                 logger.info(
                     f"Entry order placed: {plan.symbol} {order_side} "
-                    f"@ ${order.price:.2f} qty={order.qty} tag={order.tag}"
+                    f"@ ${order.price:.2f} qty={order.qty} tag={order.tag} "
+                    f"client_id={client_id}"
                 )
 
             except Exception as e:
@@ -249,6 +297,15 @@ class EntryPlanMonitor:
         """
         Проверить условия отмены плана.
 
+        Поддерживаемые условия:
+        - break_below PRICE — markPrice ниже уровня (мгновенный)
+        - break_above PRICE — markPrice выше уровня (мгновенный)
+        - break_below_close PRICE — lastPrice ниже уровня (приближение к close)
+        - break_above_close PRICE — lastPrice выше уровня (приближение к close)
+        - break_below_wick PRICE — lowPrice24h ниже уровня (любое касание за 24h)
+        - break_above_wick PRICE — highPrice24h выше уровня (любое касание за 24h)
+        - time_valid_hours exceeded — истекло время действия
+
         Returns:
             (should_cancel, reason)
         """
@@ -257,12 +314,17 @@ class EntryPlanMonitor:
 
         try:
             ticker = await self.client.get_tickers(plan.symbol)
-            current_price = float(ticker.get('markPrice', 0))
+            prices = {
+                'mark': float(ticker.get('markPrice', 0)),
+                'last': float(ticker.get('lastPrice', 0)),
+                'high_24h': float(ticker.get('highPrice24h', 0)),
+                'low_24h': float(ticker.get('lowPrice24h', 0)),
+            }
 
             for condition in plan.cancel_if:
                 should_cancel, reason = self._evaluate_cancel_condition(
                     condition=condition,
-                    current_price=current_price,
+                    prices=prices,
                     plan_created_at=plan.created_at,
                     time_valid_hours=plan.time_valid_hours
                 )
@@ -279,23 +341,51 @@ class EntryPlanMonitor:
     def _evaluate_cancel_condition(
         self,
         condition: str,
-        current_price: float,
+        prices: dict,
         plan_created_at: str,
         time_valid_hours: float
     ) -> tuple[bool, str]:
-        """Оценить одно условие отмены"""
+        """
+        Оценить одно условие отмены.
+
+        Args:
+            prices: {'mark': float, 'last': float, 'high_24h': float, 'low_24h': float}
+        """
         parts = condition.split()
 
+        # === BREAK BELOW CONDITIONS ===
         if parts[0] == "break_below" and len(parts) >= 2:
             level = float(parts[1])
-            if current_price < level:
-                return True, f"break_below {level}"
+            if prices['mark'] < level:
+                return True, f"break_below ${level:.2f} (mark=${prices['mark']:.2f})"
 
+        if parts[0] == "break_below_close" and len(parts) >= 2:
+            level = float(parts[1])
+            if prices['last'] < level:
+                return True, f"break_below_close ${level:.2f} (last=${prices['last']:.2f})"
+
+        if parts[0] == "break_below_wick" and len(parts) >= 2:
+            level = float(parts[1])
+            if prices['low_24h'] < level:
+                return True, f"break_below_wick ${level:.2f} (low24h=${prices['low_24h']:.2f})"
+
+        # === BREAK ABOVE CONDITIONS ===
         if parts[0] == "break_above" and len(parts) >= 2:
             level = float(parts[1])
-            if current_price > level:
-                return True, f"break_above {level}"
+            if prices['mark'] > level:
+                return True, f"break_above ${level:.2f} (mark=${prices['mark']:.2f})"
 
+        if parts[0] == "break_above_close" and len(parts) >= 2:
+            level = float(parts[1])
+            if prices['last'] > level:
+                return True, f"break_above_close ${level:.2f} (last=${prices['last']:.2f})"
+
+        if parts[0] == "break_above_wick" and len(parts) >= 2:
+            level = float(parts[1])
+            if prices['high_24h'] > level:
+                return True, f"break_above_wick ${level:.2f} (high24h=${prices['high_24h']:.2f})"
+
+        # === TIME CONDITIONS ===
         if "time_valid_hours" in condition or "time_exceeded" in condition:
             try:
                 created = datetime.fromisoformat(plan_created_at.replace('Z', '+00:00'))
@@ -309,42 +399,126 @@ class EntryPlanMonitor:
 
         return False, ""
 
+    def _is_invalidation_cancel(self, reason: str) -> bool:
+        """
+        Проверить, является ли причина отмены "инвалидацией" плана.
+
+        Инвалидация = план больше не актуален:
+        - break_below / break_above (цена пробила уровень)
+        - direction_sanity (цена ушла от зоны)
+        - time_exceeded (истекло время)
+
+        НЕ инвалидация:
+        - Ручная отмена пользователем
+        - Технические ошибки
+        """
+        invalidation_patterns = [
+            "break_below",
+            "break_above",
+            "direction_sanity",
+            "time_exceeded",
+            "price_moved_above",
+            "price_moved_below"
+        ]
+        return any(pattern in reason.lower() for pattern in invalidation_patterns)
+
     async def _cancel_plan(self, plan: EntryPlan, reason: str):
         """
-        Отменить план.
+        Отменить план с partial fill policy.
 
-        - Отменяет все pending/placed ордера
-        - Если есть fills — оставляет позицию с SL/TP (Вариант A)
-        - Уведомляет пользователя
+        Policy для partial fills (<min_fill_pct_to_keep):
+        - При ИНВАЛИДАЦИИ (break, timeout, direction_sanity) → закрыть позицию market
+        - При других причинах → оставить с SL/TP
+
+        Инвалидация означает что план больше не актуален и маленькая позиция
+        скорее всего будет убыточной.
         """
         logger.info(f"Cancelling plan {plan.plan_id}: {reason}")
 
         plan.status = "cancelled"
         plan.cancel_reason = reason
 
-        # Отменяем все открытые ордера
+        # Отменяем все открытые ордера (prefix: EP:{plan_id[:8]})
+        short_plan_id = plan.plan_id[:8]
         cancelled = await self.client.cancel_orders_by_prefix(
             symbol=plan.symbol,
-            client_order_id_prefix=plan.plan_id[:20]
+            client_order_id_prefix=f"EP:{short_plan_id}"
         )
 
         logger.info(f"Cancelled {len(cancelled)} orders for plan {plan.plan_id}")
 
-        # Если есть fills — ставим SL/TP на частичную позицию
+        # Пересчитываем метрики
         plan.recalculate_metrics()
 
+        # === METRICS: filled_pct_at_cancel ===
+        plan.filled_pct_at_cancel = plan.fill_percentage
+        logger.info(f"Plan cancelled at {plan.filled_pct_at_cancel:.1f}% fill")
+
         if plan.has_fills:
-            logger.info(
-                f"Plan has partial fills ({plan.fill_percentage:.0f}%), "
-                f"setting SL/TP on partial position"
-            )
-            await self._setup_sl_tp_for_partial(plan)
-            await self._notify_plan_cancelled_with_position(plan, reason)
+            fill_pct = plan.fill_percentage
+            is_invalidation = self._is_invalidation_cancel(reason)
+
+            # === PARTIAL FILL POLICY ===
+            # Закрываем маленькую позицию ТОЛЬКО при инвалидации
+            if fill_pct < plan.min_fill_pct_to_keep and is_invalidation:
+                logger.info(
+                    f"Plan fill {fill_pct:.0f}% < {plan.min_fill_pct_to_keep:.0f}% "
+                    f"+ invalidation ({reason}) → closing position market"
+                )
+                await self._close_partial_position(plan)
+                await self._notify_plan_cancelled_position_closed(plan, reason)
+            else:
+                # Достаточно заполнено ИЛИ не инвалидация → оставляем с SL/TP
+                if fill_pct < plan.min_fill_pct_to_keep:
+                    logger.info(
+                        f"Plan fill {fill_pct:.0f}% < {plan.min_fill_pct_to_keep:.0f}% "
+                        f"but NOT invalidation → keeping position with SL/TP"
+                    )
+                else:
+                    logger.info(
+                        f"Plan fill {fill_pct:.0f}% >= {plan.min_fill_pct_to_keep:.0f}% "
+                        f"→ keeping position with SL/TP"
+                    )
+                await self._setup_sl_tp_for_partial(plan)
+                await self._notify_plan_cancelled_with_position(plan, reason)
         else:
             await self._notify_plan_cancelled(plan, reason)
 
         # Убираем из мониторинга
         self.unregister_plan(plan.plan_id)
+
+    async def _close_partial_position(self, plan: EntryPlan):
+        """Закрыть частичную позицию market ордером"""
+        if plan.filled_qty <= 0:
+            return
+
+        try:
+            # Для закрытия Long нужен Sell, для Short — Buy
+            close_side = "Sell" if plan.side == "Long" else "Buy"
+
+            # Получаем instrument_info для округления
+            instrument_info = await self.client.get_instrument_info(plan.symbol)
+            qty_step = instrument_info.get('qtyStep', '0.001')
+
+            qty_str = round_qty(plan.filled_qty, qty_step)
+
+            short_plan_id = plan.plan_id[:8]
+            await self.client.place_order(
+                symbol=plan.symbol,
+                side=close_side,
+                order_type="Market",
+                qty=qty_str,
+                reduce_only=True,
+                client_order_id=f"EP:{short_plan_id}:close"
+            )
+
+            logger.info(
+                f"Closed partial position: {plan.symbol} {close_side} "
+                f"qty={plan.filled_qty:.4f} (market)"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to close partial position: {e}", exc_info=True)
 
     # ==================== Order Fills ====================
 
@@ -402,9 +576,80 @@ class EntryPlanMonitor:
         if has_updates:
             plan.recalculate_metrics()
 
+            # === METRICS: First fill ===
+            if plan.has_fills and not plan.first_fill_at:
+                plan.first_fill_at = datetime.now(timezone.utc).isoformat()
+                # Рассчитываем время до первого fill
+                if plan.activated_at:
+                    try:
+                        activated = datetime.fromisoformat(plan.activated_at.replace('Z', '+00:00'))
+                        now = datetime.now(timezone.utc)
+                        plan.time_to_first_fill_sec = (now - activated).total_seconds()
+                        logger.info(f"Time to first fill: {plan.time_to_first_fill_sec:.1f}s")
+                    except Exception:
+                        pass
+
+            # === PROTECT AFTER FIRST FILL ===
+            # Ставим SL сразу после первого fill для защиты позиции
+            if plan.protect_after_first_fill and plan.has_fills and not plan.sl_set:
+                await self._setup_sl_after_first_fill(plan)
+
             # Проверить завершение плана
             if plan.is_complete:
                 plan.status = "filled"
+                plan.completed_at = datetime.now(timezone.utc).isoformat()
+                # Рассчитываем время до полного fill
+                if plan.activated_at:
+                    try:
+                        activated = datetime.fromisoformat(plan.activated_at.replace('Z', '+00:00'))
+                        now = datetime.now(timezone.utc)
+                        plan.time_to_full_fill_sec = (now - activated).total_seconds()
+                        logger.info(f"Time to full fill: {plan.time_to_full_fill_sec:.1f}s")
+                    except Exception:
+                        pass
+
+    async def _setup_sl_after_first_fill(self, plan: EntryPlan):
+        """Установить SL после первого fill для защиты позиции"""
+        try:
+            trigger_type = "LastPrice" if plan.testnet else "MarkPrice"
+
+            await self.client.set_trading_stop(
+                symbol=plan.symbol,
+                stop_loss=str(plan.stop_price),
+                sl_trigger_by=trigger_type
+            )
+
+            plan.sl_set = True
+            logger.info(
+                f"SL set after first fill: {plan.symbol} @ ${plan.stop_price:.2f} "
+                f"(filled {plan.fill_percentage:.0f}%)"
+            )
+
+            # Уведомляем пользователя
+            await self._notify_sl_set_early(plan)
+
+        except Exception as e:
+            logger.error(f"Failed to set SL after first fill: {e}", exc_info=True)
+
+    async def _notify_sl_set_early(self, plan: EntryPlan):
+        """Уведомление об установке SL после первого fill"""
+        try:
+            message = f"""
+🛡️ <b>SL установлен!</b>
+
+<b>{plan.symbol}</b> {plan.side.upper()}
+🛑 <b>Stop:</b> ${plan.stop_price:.2f}
+📊 <b>Filled:</b> {plan.fill_percentage:.0f}%
+
+<i>Позиция защищена. Ожидаю остальные entry ордера...</i>
+"""
+            await self.bot.send_message(
+                chat_id=plan.user_id,
+                text=message.strip(),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send SL notification: {e}")
 
     async def _log_entry_fill(self, plan: EntryPlan, order: EntryOrder):
         """Залогировать entry fill в TradeRecord"""
@@ -501,11 +746,12 @@ class EntryPlanMonitor:
                     })
 
             if tp_levels:
+                short_plan_id = plan.plan_id[:8]
                 await self.client.place_ladder_tp(
                     symbol=plan.symbol,
                     position_side=order_side,
                     tp_levels=tp_levels,
-                    client_order_id_prefix=f"{plan.plan_id[:15]}_tp"
+                    client_order_id_prefix=f"EP:{short_plan_id}:TP"
                 )
                 logger.info(f"Ladder TP set: {len(tp_levels)} levels for {plan.symbol}")
 
@@ -656,6 +902,33 @@ class EntryPlanMonitor:
             )
         except Exception as e:
             logger.error(f"Failed to send partial cancel notification: {e}")
+
+    async def _notify_plan_cancelled_position_closed(self, plan: EntryPlan, reason: str):
+        """Уведомление об отмене плана с закрытием маленькой позиции"""
+        try:
+            side_emoji = "🟢" if plan.side == "Long" else "🔴"
+
+            message = f"""
+⚠️ <b>Entry Plan Cancelled (Position Closed)</b>
+
+{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
+
+<b>Reason:</b> {reason}
+
+📊 <b>Filled:</b> {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders)})
+⚡ <b>Avg Entry:</b> ${plan.avg_entry_price:.2f}
+📦 <b>Qty:</b> {plan.filled_qty:.4f}
+
+<i>🔄 Позиция закрыта market (fill < {plan.min_fill_pct_to_keep:.0f}%)</i>
+"""
+
+            await self.bot.send_message(
+                chat_id=plan.user_id,
+                text=message.strip(),
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send position closed notification: {e}")
 
 
 def create_entry_plan_monitor(

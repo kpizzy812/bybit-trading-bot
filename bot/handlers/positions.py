@@ -8,8 +8,11 @@ from aiogram.fsm.state import State, StatesGroup
 
 from bot.keyboards.positions_kb import (
     get_positions_list_kb,
+    get_positions_with_plans_kb,
     get_position_detail_kb,
     get_order_detail_kb,
+    get_entry_plan_detail_kb,
+    get_entry_plan_cancel_confirm_kb,
     get_move_sl_confirmation_kb,
     get_close_confirmation_kb,
     get_panic_close_all_confirmation_kb
@@ -32,8 +35,8 @@ class PositionStates(StatesGroup):
 # ============================================================
 
 @router.callback_query(F.data == "pos_refresh")
-async def refresh_positions(callback: CallbackQuery, settings_storage):
-    """Обновить список позиций и ордеров"""
+async def refresh_positions(callback: CallbackQuery, settings_storage, entry_plan_monitor=None):
+    """Обновить список позиций, ордеров и Entry Plans"""
     await callback.answer("🔄 Обновление...")
 
     user_id = callback.from_user.id
@@ -45,10 +48,31 @@ async def refresh_positions(callback: CallbackQuery, settings_storage):
         positions = await client.get_positions()
         all_orders = await client.get_open_orders()
 
-        # Фильтруем только entry ордера (не reduce_only, которые являются TP)
-        orders = [o for o in all_orders if not o.get('reduceOnly', False)]
+        # Фильтруем только entry ордера (не reduce_only, не entry plan ордера)
+        orders = []
+        for o in all_orders:
+            if o.get('reduceOnly', False):
+                continue
+            order_link_id = o.get('orderLinkId', '')
+            if order_link_id.startswith('EP:'):
+                continue
+            orders.append(o)
 
-        if not positions and not orders:
+        # Получаем активные Entry Plans
+        entry_plans = []
+        if entry_plan_monitor:
+            for plan_id, plan in entry_plan_monitor.active_plans.items():
+                if plan.user_id == user_id:
+                    entry_plans.append({
+                        'plan_id': plan_id,
+                        'symbol': plan.symbol,
+                        'side': plan.side,
+                        'status': plan.status,
+                        'fill_percentage': plan.fill_percentage,
+                        'mode': plan.mode
+                    })
+
+        if not positions and not orders and not entry_plans:
             await callback.message.edit_text(
                 "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
                 "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю"
@@ -61,13 +85,19 @@ async def refresh_positions(callback: CallbackQuery, settings_storage):
             text += "📊 <b>Открытые позиции:</b>\n\n"
             text += await _format_positions_list(positions)
 
+        if entry_plans:
+            text += "📋 <b>Активные Entry Plans:</b>\n\n"
+            text += _format_entry_plans_list(entry_plans)
+
         if orders:
             text += "⏳ <b>Ожидающие ордера:</b>\n\n"
             text += await _format_orders_list(orders)
 
+        text += "💡 <i>Нажми для управления</i>"
+
         await callback.message.edit_text(
             text,
-            reply_markup=get_positions_list_kb(positions, orders)
+            reply_markup=get_positions_with_plans_kb(positions, orders, entry_plans)
         )
 
     except Exception as e:
@@ -581,8 +611,8 @@ async def cancel_order(callback: CallbackQuery, settings_storage):
 # ============================================================
 
 @router.callback_query(F.data == "pos_back_to_list")
-async def back_to_positions_list(callback: CallbackQuery, settings_storage):
-    """Вернуться к списку позиций и ордеров"""
+async def back_to_positions_list(callback: CallbackQuery, settings_storage, entry_plan_monitor=None):
+    """Вернуться к списку позиций, ордеров и Entry Plans"""
     await callback.answer()
 
     user_id = callback.from_user.id
@@ -594,10 +624,31 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage):
         positions = await client.get_positions()
         all_orders = await client.get_open_orders()
 
-        # Фильтруем только entry ордера (не reduce_only, которые являются TP)
-        orders = [o for o in all_orders if not o.get('reduceOnly', False)]
+        # Фильтруем только entry ордера (не reduce_only, не entry plan ордера)
+        orders = []
+        for o in all_orders:
+            if o.get('reduceOnly', False):
+                continue
+            order_link_id = o.get('orderLinkId', '')
+            if order_link_id.startswith('EP:'):
+                continue
+            orders.append(o)
 
-        if not positions and not orders:
+        # Получаем активные Entry Plans
+        entry_plans = []
+        if entry_plan_monitor:
+            for plan_id, plan in entry_plan_monitor.active_plans.items():
+                if plan.user_id == user_id:
+                    entry_plans.append({
+                        'plan_id': plan_id,
+                        'symbol': plan.symbol,
+                        'side': plan.side,
+                        'status': plan.status,
+                        'fill_percentage': plan.fill_percentage,
+                        'mode': plan.mode
+                    })
+
+        if not positions and not orders and not entry_plans:
             await callback.message.edit_text(
                 "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
                 "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю"
@@ -609,13 +660,19 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage):
             text += "📊 <b>Открытые позиции:</b>\n\n"
             text += await _format_positions_list(positions)
 
+        if entry_plans:
+            text += "📋 <b>Активные Entry Plans:</b>\n\n"
+            text += _format_entry_plans_list(entry_plans)
+
         if orders:
             text += "⏳ <b>Ожидающие ордера:</b>\n\n"
             text += await _format_orders_list(orders)
 
+        text += "💡 <i>Нажми для управления</i>"
+
         await callback.message.edit_text(
             text,
-            reply_markup=get_positions_list_kb(positions, orders)
+            reply_markup=get_positions_with_plans_kb(positions, orders, entry_plans)
         )
 
     except Exception as e:
@@ -627,8 +684,239 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage):
 
 
 # ============================================================
+# CALLBACK: Entry Plan Detail
+# ============================================================
+
+@router.callback_query(F.data.startswith("eplan_detail:"))
+async def show_entry_plan_detail(callback: CallbackQuery, entry_plan_monitor):
+    """Показать детали Entry Plan"""
+    await callback.answer()
+
+    # Парсим plan_id (короткий, 8 символов)
+    short_plan_id = callback.data.split(":")[1]
+
+    # Ищем план по короткому ID
+    plan = None
+    for pid, p in entry_plan_monitor.active_plans.items():
+        if pid.startswith(short_plan_id):
+            plan = p
+            break
+
+    if not plan:
+        await callback.message.edit_text(
+            f"❌ Entry Plan не найден (возможно уже завершён)"
+        )
+        return
+
+    # Форматируем детали плана
+    text = _format_entry_plan_detail(plan)
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=get_entry_plan_detail_kb(plan.plan_id)
+    )
+
+
+@router.callback_query(F.data.startswith("eplan_cancel:"))
+async def cancel_entry_plan_confirmation(callback: CallbackQuery, entry_plan_monitor):
+    """Запрос подтверждения отмены Entry Plan"""
+    await callback.answer()
+
+    short_plan_id = callback.data.split(":")[1]
+
+    # Ищем план
+    plan = None
+    for pid, p in entry_plan_monitor.active_plans.items():
+        if pid.startswith(short_plan_id):
+            plan = p
+            break
+
+    if not plan:
+        await callback.message.edit_text(
+            f"❌ Entry Plan не найден"
+        )
+        return
+
+    side_emoji = "🟢" if plan.side == "Long" else "🔴"
+
+    await callback.message.edit_text(
+        f"⚠️ <b>Подтверждение отмены Entry Plan</b>\n\n"
+        f"{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}\n"
+        f"📊 Mode: {plan.mode}\n"
+        f"📈 Filled: {plan.fill_percentage:.0f}%\n\n"
+        f"Ты уверен, что хочешь отменить этот план?\n\n"
+        f"⚠️ Все pending ордера будут отменены.\n"
+        f"{'✅ Частичная позиция получит SL/TP' if plan.has_fills else ''}",
+        reply_markup=get_entry_plan_cancel_confirm_kb(plan.plan_id)
+    )
+
+
+@router.callback_query(F.data.startswith("eplan_cancel_confirm:"))
+async def cancel_entry_plan_execute(callback: CallbackQuery, entry_plan_monitor):
+    """Выполнить отмену Entry Plan"""
+    await callback.answer("Отменяю план...")
+
+    short_plan_id = callback.data.split(":")[1]
+
+    # Ищем план
+    plan = None
+    full_plan_id = None
+    for pid, p in entry_plan_monitor.active_plans.items():
+        if pid.startswith(short_plan_id):
+            plan = p
+            full_plan_id = pid
+            break
+
+    if not plan:
+        await callback.message.edit_text(
+            f"❌ Entry Plan не найден"
+        )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+        return
+
+    try:
+        # Отменяем план (это вызовет _cancel_plan в мониторе)
+        await entry_plan_monitor._cancel_plan(plan, "user_cancelled")
+
+        side_emoji = "🟢" if plan.side == "Long" else "🔴"
+
+        result_text = (
+            f"✅ <b>Entry Plan отменён</b>\n\n"
+            f"{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}\n"
+            f"📊 Mode: {plan.mode}\n"
+        )
+
+        if plan.has_fills:
+            result_text += (
+                f"\n📈 <b>Partial position:</b>\n"
+                f"  Filled: {plan.fill_percentage:.0f}%\n"
+                f"  Qty: {plan.filled_qty:.4f}\n"
+                f"  Avg: ${plan.avg_entry_price:.2f}\n"
+                f"\n✅ SL/TP установлены на позицию"
+            )
+        else:
+            result_text += "\n<i>Все ордера отменены, позиция не открыта</i>"
+
+        await callback.message.edit_text(result_text)
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+
+    except Exception as e:
+        logger.error(f"Error cancelling entry plan: {e}")
+        await callback.message.edit_text(
+            f"❌ Ошибка при отмене плана:\n{str(e)}"
+        )
+        await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+
+
+# ============================================================
 # HELPER FUNCTIONS
 # ============================================================
+
+def _format_entry_plan_detail(plan) -> str:
+    """Форматирование детальной информации об Entry Plan"""
+    side_emoji = "🟢" if plan.side == "Long" else "🔴"
+
+    # Статус
+    status_map = {
+        "pending": "⏳ Ожидает активации",
+        "active": "📋 Активен",
+        "partial": "🔄 Частично заполнен",
+        "filled": "✅ Заполнен",
+        "cancelled": "❌ Отменён"
+    }
+    status_text = status_map.get(plan.status, plan.status)
+
+    text = f"""
+📋 <b>Entry Plan</b>
+
+{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
+📊 Mode: {plan.mode}
+📈 Status: {status_text}
+
+<b>Progress:</b>
+Filled: {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders)})
+"""
+
+    if plan.filled_qty > 0:
+        text += f"Qty: {plan.filled_qty:.4f}\n"
+        text += f"Avg Entry: ${plan.avg_entry_price:.2f}\n"
+
+    text += f"\n<b>Entry Orders:</b>\n"
+
+    for i, order_dict in enumerate(plan.orders, 1):
+        status = order_dict.get('status', 'pending')
+        price = order_dict.get('price', 0)
+        size_pct = order_dict.get('size_pct', 0)
+        tag = order_dict.get('tag', f'E{i}')
+
+        if status == 'filled':
+            fill_price = order_dict.get('fill_price', price)
+            status_icon = "✅"
+            price_text = f"${fill_price:.2f}"
+        elif status == 'placed':
+            status_icon = "⏳"
+            price_text = f"${price:.2f}"
+        elif status == 'cancelled':
+            status_icon = "❌"
+            price_text = f"${price:.2f}"
+        else:
+            status_icon = "⚪"
+            price_text = f"${price:.2f}"
+
+        text += f"  {status_icon} {tag}: {price_text} ({size_pct:.0f}%)\n"
+
+    text += f"""
+<b>Risk Management:</b>
+🛑 Stop: ${plan.stop_price:.2f}
+"""
+
+    if plan.targets:
+        text += "<b>Targets:</b>\n"
+        for i, t in enumerate(plan.targets, 1):
+            text += f"  🎯 TP{i}: ${t['price']:.2f} ({t.get('partial_close_pct', 100)}%)\n"
+
+    # Cancel conditions
+    if plan.cancel_if:
+        text += f"\n<b>Cancel if:</b>\n"
+        for cond in plan.cancel_if:
+            text += f"  • {cond}\n"
+
+    text += f"\n⏰ Valid: {plan.time_valid_hours}h"
+
+    if plan.is_activated and plan.activated_at:
+        text += f"\n✅ Activated"
+
+    if plan.sl_set:
+        text += f"\n🛡️ SL set on position"
+
+    text += "\n\n💡 Выбери действие ниже:"
+
+    return text.strip()
+
+
+def _format_entry_plans_list(entry_plans: list) -> str:
+    """Форматирование списка Entry Plans"""
+    text = ""
+
+    for ep in entry_plans:
+        side_emoji = "🟢" if ep['side'] == "Long" else "🔴"
+
+        if ep['status'] == "partial":
+            status_emoji = "🔄"
+        elif ep['status'] == "active":
+            status_emoji = "📋"
+        elif ep['status'] == "pending":
+            status_emoji = "⏳"
+        else:
+            status_emoji = "📋"
+
+        text += (
+            f"{status_emoji} {side_emoji} <b>{ep['symbol']}</b> {ep['mode'].upper()}\n"
+            f"   Filled: {ep['fill_percentage']:.0f}%\n\n"
+        )
+
+    return text
+
 
 async def _format_positions_list(positions: list) -> str:
     """Форматирование списка позиций"""

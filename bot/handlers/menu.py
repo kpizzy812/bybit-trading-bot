@@ -28,9 +28,9 @@ async def open_trade_handler(message: Message, state: FSMContext):
 
 
 @router.message(F.text == "📊 Позиции")
-async def positions_handler(message: Message, settings_storage, lock_manager):
-    """Показать открытые позиции и ордера"""
-    from bot.keyboards.positions_kb import get_positions_list_kb
+async def positions_handler(message: Message, settings_storage, lock_manager, entry_plan_monitor=None):
+    """Показать открытые позиции, ордера и Entry Plans"""
+    from bot.keyboards.positions_kb import get_positions_with_plans_kb
 
     # Получаем настройки пользователя
     user_settings = await settings_storage.get_settings(message.from_user.id)
@@ -43,10 +43,33 @@ async def positions_handler(message: Message, settings_storage, lock_manager):
         positions = await client.get_positions()
         all_orders = await client.get_open_orders()
 
-        # Фильтруем только entry ордера (не reduce_only, которые являются TP)
-        orders = [o for o in all_orders if not o.get('reduceOnly', False)]
+        # Фильтруем только entry ордера (не reduce_only, не entry plan ордера)
+        orders = []
+        for o in all_orders:
+            if o.get('reduceOnly', False):
+                continue
+            # Исключаем ордера Entry Plans (начинаются с EP:)
+            order_link_id = o.get('orderLinkId', '')
+            if order_link_id.startswith('EP:'):
+                continue
+            orders.append(o)
 
-        if not positions and not orders:
+        # Получаем активные Entry Plans для пользователя
+        entry_plans = []
+        if entry_plan_monitor:
+            user_id = message.from_user.id
+            for plan_id, plan in entry_plan_monitor.active_plans.items():
+                if plan.user_id == user_id:
+                    entry_plans.append({
+                        'plan_id': plan_id,
+                        'symbol': plan.symbol,
+                        'side': plan.side,
+                        'status': plan.status,
+                        'fill_percentage': plan.fill_percentage,
+                        'mode': plan.mode
+                    })
+
+        if not positions and not orders and not entry_plans:
             await message.answer(
                 "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
                 "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю",
@@ -86,7 +109,18 @@ async def positions_handler(message: Message, settings_storage, lock_manager):
                     f"  Liq: ${liq_price}\n\n"
                 )
 
-        # Ордера
+        # Entry Plans
+        if entry_plans:
+            text += "📋 <b>Активные Entry Plans:</b>\n\n"
+            for ep in entry_plans:
+                side_emoji = "🟢" if ep['side'] == "Long" else "🔴"
+                status_emoji = "🔄" if ep['status'] == "partial" else "📋"
+                text += (
+                    f"{status_emoji} {side_emoji} <b>{ep['symbol']}</b> {ep['mode'].upper()}\n"
+                    f"   Filled: {ep['fill_percentage']:.0f}%\n\n"
+                )
+
+        # Ордера (не Entry Plan)
         if orders:
             text += "⏳ <b>Ожидающие ордера:</b>\n\n"
             for order in orders:
@@ -107,7 +141,7 @@ async def positions_handler(message: Message, settings_storage, lock_manager):
         text += "💡 <i>Нажми для управления</i>"
 
         # Inline кнопки для управления
-        await message.answer(text, reply_markup=get_positions_list_kb(positions, orders))
+        await message.answer(text, reply_markup=get_positions_with_plans_kb(positions, orders, entry_plans))
 
     except Exception as e:
         await message.answer(

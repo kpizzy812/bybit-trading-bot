@@ -683,6 +683,9 @@ class TradeLogger:
         # === NEW: Confidence buckets ===
         confidence_stats = self._calculate_confidence_stats(closed_trades)
 
+        # === NEW: Entry Plan статистика ===
+        entry_plan_stats = self._calculate_entry_plan_stats(closed_trades)
+
         return {
             'total_trades': total_trades,
             'winrate': winrate,
@@ -712,7 +715,8 @@ class TradeLogger:
             'ai_winrate': ai_winrate,
             'manual_trades_count': len(manual_trades),
             'manual_winrate': manual_winrate,
-            'confidence_stats': confidence_stats
+            'confidence_stats': confidence_stats,
+            'entry_plan_stats': entry_plan_stats
         }
 
     def _calculate_streaks(self, trades: List[TradeRecord]) -> tuple:
@@ -773,6 +777,44 @@ class TradeLogger:
 
         return result
 
+    def _calculate_entry_plan_stats(self, trades: List[TradeRecord]) -> Dict:
+        """Статистика по Entry Plans (ladder vs single)"""
+        ladder_trades = [t for t in trades if t.entry_mode == 'ladder']
+        single_trades = [t for t in trades if t.entry_mode == 'single']
+
+        ladder_count = len(ladder_trades)
+        single_count = len(single_trades)
+
+        # Winrate
+        ladder_wins = len([t for t in ladder_trades if t.outcome == 'win'])
+        single_wins = len([t for t in single_trades if t.outcome == 'win'])
+
+        ladder_winrate = (ladder_wins / ladder_count * 100) if ladder_count > 0 else 0
+        single_winrate = (single_wins / single_count * 100) if single_count > 0 else 0
+
+        # PnL
+        ladder_pnl = sum(t.pnl_usd for t in ladder_trades if t.pnl_usd) if ladder_trades else 0
+        single_pnl = sum(t.pnl_usd for t in single_trades if t.pnl_usd) if single_trades else 0
+
+        # Avg entry fills для ladder
+        avg_entry_fills = 0
+        if ladder_trades:
+            total_fills = sum(
+                len(t.entry_fills) for t in ladder_trades
+                if t.entry_fills
+            )
+            avg_entry_fills = total_fills / ladder_count if ladder_count > 0 else 0
+
+        return {
+            'ladder_count': ladder_count,
+            'ladder_winrate': ladder_winrate,
+            'ladder_pnl': ladder_pnl,
+            'single_count': single_count,
+            'single_winrate': single_winrate,
+            'single_pnl': single_pnl,
+            'avg_entry_fills': avg_entry_fills
+        }
+
     def _empty_stats(self) -> Dict:
         """Пустая статистика"""
         return {
@@ -803,7 +845,16 @@ class TradeLogger:
             'ai_winrate': 0,
             'manual_trades_count': 0,
             'manual_winrate': 0,
-            'confidence_stats': {}
+            'confidence_stats': {},
+            'entry_plan_stats': {
+                'ladder_count': 0,
+                'ladder_winrate': 0,
+                'ladder_pnl': 0,
+                'single_count': 0,
+                'single_winrate': 0,
+                'single_pnl': 0,
+                'avg_entry_fills': 0
+            }
         }
 
 

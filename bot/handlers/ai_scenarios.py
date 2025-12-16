@@ -85,17 +85,26 @@ def calculate_confidence_adjusted_risk(
 
 def parse_entry_plan(
     scenario: dict,
-    total_qty: float,
     trade_id: str,
     user_id: int,
     symbol: str,
     side: str,
     risk_usd: float,
     leverage: int,
-    testnet: bool
+    testnet: bool,
+    qty_step: str = "0.001",
+    tick_size: str = "0.01"
 ) -> Optional[EntryPlan]:
     """
-    Распарсить entry_plan из AI сценария.
+    Распарсить entry_plan из AI сценария с Risk-on-plan моделью.
+
+    Risk-on-plan формула:
+        P_avg = Σ(w_i * p_i)  — средневзвешенная цена входа
+        Q_total = R / |P_avg - SL|  — общий размер позиции
+        Q_i = Q_total * w_i  — размер каждого ордера
+
+    Гарантирует: суммарный риск до SL ≤ risk_usd независимо от того,
+    сколько entry ордеров исполнится.
 
     Returns:
         EntryPlan или None если сценарий использует старый формат
@@ -105,10 +114,63 @@ def parse_entry_plan(
     if not entry_plan_data:
         return None  # Fallback на старую логику
 
-    # Парсим orders
+    # Парсим stop_loss
+    stop_loss = scenario.get('stop_loss', {})
+    stop_price = stop_loss.get('recommended', 0)
+
+    if not stop_price:
+        logger.error("Entry plan requires stop_loss.recommended")
+        return None
+
+    # === RISK-ON-PLAN: Расчёт P_avg ===
+    orders_data = entry_plan_data.get('orders', [])
+    if not orders_data:
+        logger.error("Entry plan requires at least one order")
+        return None
+
+    # Считаем P_avg = Σ(w_i * p_i) где w_i = size_pct / 100
+    p_avg = 0.0
+    total_weight = 0.0
+
+    for order_data in orders_data:
+        price = order_data['price']
+        weight = order_data['size_pct'] / 100
+        p_avg += price * weight
+        total_weight += weight
+
+    # Валидация: сумма весов должна быть ~1.0 (100%)
+    if abs(total_weight - 1.0) > 0.01:
+        logger.warning(f"Entry plan weights sum to {total_weight*100:.1f}%, expected 100%")
+        # Нормализуем если нужно
+        if total_weight > 0:
+            p_avg = p_avg / total_weight
+
+    # === RISK-ON-PLAN: Расчёт Q_total ===
+    stop_distance = abs(p_avg - stop_price)
+
+    if stop_distance <= 0:
+        logger.error(f"Invalid stop distance: P_avg={p_avg}, SL={stop_price}")
+        return None
+
+    q_total = risk_usd / stop_distance
+
+    # Округляем до qty_step
+    qty_step_float = float(qty_step)
+    q_total = round(q_total / qty_step_float) * qty_step_float
+
+    logger.info(
+        f"Risk-on-plan: P_avg=${p_avg:.2f}, SL=${stop_price:.2f}, "
+        f"distance=${stop_distance:.2f}, Q_total={q_total:.6f}"
+    )
+
+    # === Создаём ордера с пропорциональным qty ===
     orders = []
-    for i, order_data in enumerate(entry_plan_data.get('orders', [])):
-        order_qty = total_qty * (order_data['size_pct'] / 100)
+    for i, order_data in enumerate(orders_data):
+        weight = order_data['size_pct'] / 100
+        order_qty = q_total * weight
+
+        # Округляем qty
+        order_qty = round(order_qty / qty_step_float) * qty_step_float
 
         orders.append(EntryOrder(
             price=order_data['price'],
@@ -122,10 +184,6 @@ def parse_entry_plan(
     # Парсим activation
     activation = entry_plan_data.get('activation', {})
 
-    # Парсим stop_loss
-    stop_loss = scenario.get('stop_loss', {})
-    stop_price = stop_loss.get('recommended', 0)
-
     # Парсим targets
     targets = scenario.get('targets', [])
 
@@ -138,7 +196,7 @@ def parse_entry_plan(
         side=side,
         mode=entry_plan_data.get('mode', 'ladder'),
         orders=orders,
-        total_qty=total_qty,
+        total_qty=q_total,
         activation_type=activation.get('type', 'immediate'),
         activation_level=activation.get('level'),
         max_distance_pct=activation.get('max_distance_pct', 0.5),
@@ -153,7 +211,7 @@ def parse_entry_plan(
 
     logger.info(
         f"Parsed entry_plan: {symbol} {side}, mode={plan.mode}, "
-        f"{len(orders)} orders, activation={plan.activation_type}"
+        f"{len(orders)} orders, Q_total={q_total:.6f}, P_avg=${p_avg:.2f}"
     )
 
     return plan
@@ -358,12 +416,39 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
     bias_emoji = "🟢" if bias == "long" else "🔴" if bias == "short" else "⚪"
     confidence = scenario.get("confidence", 0) * 100
 
-    # Entry
+    # Entry Plan (ladder) или обычный Entry
+    entry_plan = scenario.get("entry_plan")
     entry = scenario.get("entry", {})
-    entry_min = entry.get("price_min", 0)
-    entry_max = entry.get("price_max", 0)
-    entry_avg = (entry_min + entry_max) / 2 if entry_min and entry_max else 0
-    entry_type = entry.get("type", "market_order")
+
+    # Формируем текст для entry
+    if entry_plan and entry_plan.get("orders"):
+        # Ladder mode - показываем каждый ордер
+        orders = entry_plan.get("orders", [])
+        mode = entry_plan.get("mode", "ladder")
+
+        entry_text = f"💹 <b>Entry Orders ({len(orders)}):</b> [{mode}]\n"
+        for i, order in enumerate(orders, 1):
+            price = order.get("price", 0)
+            size_pct = order.get("size_pct", 0)
+            tag = order.get("tag", f"E{i}")
+            entry_text += f"   E{i}: ${price:.2f} ({size_pct}%) - {tag}\n"
+
+        # Считаем avg для отображения
+        prices = [o.get("price", 0) for o in orders]
+        weights = [o.get("size_pct", 0) for o in orders]
+        total_weight = sum(weights)
+        if total_weight > 0:
+            entry_avg = sum(p * w for p, w in zip(prices, weights)) / total_weight
+            entry_text += f"   <i>Avg: ${entry_avg:.2f}</i>"
+    else:
+        # Single entry - старый формат
+        entry_min = entry.get("price_min", 0)
+        entry_max = entry.get("price_max", 0)
+        entry_avg = (entry_min + entry_max) / 2 if entry_min and entry_max else 0
+        entry_type = entry.get("type", "market_order")
+
+        entry_text = f"💹 <b>Entry Zone:</b> ${entry_min:.2f} - ${entry_max:.2f}\n"
+        entry_text += f"   Avg: ${entry_avg:.2f} ({entry_type})"
 
     # Stop Loss
     stop_loss = scenario.get("stop_loss", {})
@@ -396,8 +481,7 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
 {bias_emoji} <b>{name}</b>
 📊 Confidence: {confidence:.0f}%
 
-💹 <b>Entry Zone:</b> ${entry_min:.2f} - ${entry_max:.2f}
-   Avg: ${entry_avg:.2f} ({entry_type})
+{entry_text}
 
 🛑 <b>Stop Loss:</b> ${sl_price:.2f}
    {sl_reason if sl_reason else ""}
@@ -928,32 +1012,45 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         trade_id = str(uuid.uuid4())
 
         # ===== ПРОВЕРКА ENTRY_PLAN (LADDER ENTRY) =====
+        # Получаем instrument_info для округления qty
+        instrument_info = position_calc.get('instrument_info', {})
+        qty_step = instrument_info.get('qtyStep', '0.001')
+        tick_size = instrument_info.get('tickSize', '0.01')
+
         entry_plan = parse_entry_plan(
             scenario=scenario,
-            total_qty=qty,
             trade_id=trade_id,
             user_id=user_id,
             symbol=symbol,
             side=side,
             risk_usd=risk_usd,
             leverage=leverage,
-            testnet=testnet_mode
+            testnet=testnet_mode,
+            qty_step=qty_step,
+            tick_size=tick_size
         )
 
         if entry_plan and entry_plan_monitor:
-            # === НОВАЯ ЛОГИКА: ENTRY PLAN ===
-            logger.info(f"Using entry_plan mode: {entry_plan.mode}, {len(entry_plan.orders)} orders")
+            # === НОВАЯ ЛОГИКА: ENTRY PLAN с Risk-on-plan ===
+            logger.info(
+                f"Using entry_plan mode: {entry_plan.mode}, "
+                f"{len(entry_plan.orders)} orders, Q_total={entry_plan.total_qty:.6f}"
+            )
+
+            # Используем qty из entry_plan (рассчитан по P_avg)
+            plan_qty = entry_plan.total_qty
 
             # Создаём TradeRecord заранее (будет обновляться по мере fills)
             try:
                 from services.trade_logger import calculate_fee, calculate_margin
 
-                # Используем первый entry price для начального расчёта
-                first_order = entry_plan.get_orders()[0]
-                initial_entry_price = first_order.price
+                # Используем P_avg для начального расчёта (будет обновлено после fills)
+                # P_avg уже рассчитан в entry_plan как средневзвешенная цена
+                orders_list = entry_plan.get_orders()
+                p_avg = sum(o.price * o.size_pct for o in orders_list) / 100
 
-                margin_usd = calculate_margin(initial_entry_price, qty, leverage)
-                entry_fee_estimate = calculate_fee(initial_entry_price, qty, is_taker=False)
+                margin_usd = calculate_margin(p_avg, plan_qty, leverage)
+                entry_fee_estimate = calculate_fee(p_avg, plan_qty, is_taker=False)
 
                 trade_record = TradeRecord(
                     trade_id=trade_id,
@@ -961,8 +1058,8 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                     symbol=symbol,
                     side=side,
                     opened_at=datetime.utcnow().isoformat(),
-                    entry_price=initial_entry_price,
-                    qty=qty,
+                    entry_price=p_avg,  # Используем P_avg как начальную цену
+                    qty=plan_qty,       # Используем Q_total из risk-on-plan
                     leverage=leverage,
                     margin_mode=settings.default_margin_mode,
                     margin_usd=margin_usd,
@@ -995,6 +1092,7 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
             await entry_plan_monitor.register_plan(entry_plan)
 
             # Формируем сообщение об успехе
+            coin = symbol.replace("USDT", "")
             success_text = f"""
 📋 <b>Entry Plan создан!</b>
 
@@ -1004,9 +1102,11 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 <b>Entry Orders ({len(entry_plan.orders)}):</b>
 """
             for i, order in enumerate(entry_plan.get_orders(), 1):
-                success_text += f"   E{i}: ${order.price:.2f} ({order.size_pct:.0f}%) - {order.tag}\n"
+                success_text += f"   E{i}: ${order.price:.2f} ({order.size_pct:.0f}%) qty={order.qty:.4f}\n"
 
             success_text += f"""
+📈 <b>P_avg:</b> ${p_avg:.2f} (средневзвешенная)
+📦 <b>Q_total:</b> {plan_qty:.4f} {coin}
 🛑 <b>Stop:</b> ${stop_price:.2f}
 """
             if targets:

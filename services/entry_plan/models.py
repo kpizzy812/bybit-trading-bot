@@ -136,6 +136,10 @@ class EntryPlan:
     cancel_if: List[str] = field(default_factory=list)
     time_valid_hours: float = 48
 
+    # Partial fill policy
+    min_fill_pct_to_keep: float = 20.0  # Если заполнено меньше — закрыть позицию при cancel
+    protect_after_first_fill: bool = True  # Ставить SL после первого fill
+
     # Trade params
     stop_price: float = 0.0
     targets: List[Dict] = field(default_factory=list)
@@ -149,10 +153,20 @@ class EntryPlan:
     updated_at: str = ""
     cancel_reason: Optional[str] = None
 
+    # Protection status (для protect_after_first_fill)
+    sl_set: bool = False  # SL уже установлен на позицию
+
     # Metrics
     filled_qty: float = 0.0
     filled_orders_count: int = 0
     avg_entry_price: float = 0.0
+
+    # Analytics metrics
+    first_fill_at: Optional[str] = None  # Время первого fill (ISO)
+    completed_at: Optional[str] = None   # Время полного заполнения (ISO)
+    time_to_first_fill_sec: Optional[float] = None  # Секунды от активации до первого fill
+    time_to_full_fill_sec: Optional[float] = None   # Секунды от активации до полного fill
+    filled_pct_at_cancel: Optional[float] = None    # % заполнения при отмене
 
     def __post_init__(self):
         if not self.created_at:

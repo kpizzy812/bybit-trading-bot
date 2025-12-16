@@ -110,7 +110,17 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger, settings_sto
                 conf = getattr(trade, 'scenario_confidence', 0) or 0
                 ai_indicator = f"🤖{conf*100:.0f}% "
 
-            # Fills info
+            # Entry mode info
+            entry_mode = getattr(trade, 'entry_mode', 'single')
+            entry_fills = getattr(trade, 'entry_fills', None)
+            entry_info = ""
+            if entry_mode == "ladder":
+                fills_count = len(entry_fills) if entry_fills else 0
+                entry_info = f"📋 {fills_count} entries"
+            elif entry_fills and len(entry_fills) > 1:
+                entry_info = f"({len(entry_fills)} fills)"
+
+            # Exit fills info
             fills_info = ""
             fills = getattr(trade, 'fills', None)
             if fills and len(fills) > 1:
@@ -130,10 +140,16 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger, settings_sto
             if mae_r is not None and mfe_r is not None:
                 mae_mfe_info = f"\n  MAE: {mae_r:.2f}R | MFE: {mfe_r:.2f}R"
 
+            # Формируем строку entry
+            entry_str = f"${trade.entry_price:.4f}"
+            avg_entry = getattr(trade, 'avg_entry_price', None)
+            if entry_mode == "ladder" and avg_entry and avg_entry > 0:
+                entry_str = f"${avg_entry:.4f} (avg)"
+
             text += (
                 f"{outcome_emoji} {side_emoji} {ai_indicator}<b>{symbol}</b> {mode_indicator} | {timestamp}\n"
-                f"  PnL: ${pnl:+.2f} ({roe:+.2f}%){fills_info}\n"
-                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}{post_sl_info}{mae_mfe_info}\n\n"
+                f"  PnL: ${pnl:+.2f} ({roe:+.2f}%){fills_info} {entry_info}\n"
+                f"  Entry: {entry_str} → Exit: {exit_str}{post_sl_info}{mae_mfe_info}\n\n"
             )
 
         # Проверяем, есть ли ещё сделки
@@ -212,6 +228,14 @@ async def show_trades_page(callback: CallbackQuery, trade_logger, settings_stora
                 conf = getattr(trade, 'scenario_confidence', 0) or 0
                 ai_indicator = f"🤖{conf*100:.0f}% "
 
+            # Entry mode info
+            entry_mode = getattr(trade, 'entry_mode', 'single')
+            entry_fills = getattr(trade, 'entry_fills', None)
+            entry_info = ""
+            if entry_mode == "ladder":
+                fills_count = len(entry_fills) if entry_fills else 0
+                entry_info = f"📋 {fills_count} entries"
+
             # Post-SL Analysis индикатор
             post_sl_info = ""
             if hasattr(trade, 'sl_was_correct') and trade.sl_was_correct is not None:
@@ -219,10 +243,16 @@ async def show_trades_page(callback: CallbackQuery, trade_logger, settings_stora
                 move = getattr(trade, 'post_sl_move_pct', 0) or 0
                 post_sl_info = f"\n  {sl_emoji} Post-SL: {move:+.1f}%"
 
+            # Формируем строку entry
+            entry_str = f"${trade.entry_price:.4f}"
+            avg_entry = getattr(trade, 'avg_entry_price', None)
+            if entry_mode == "ladder" and avg_entry and avg_entry > 0:
+                entry_str = f"${avg_entry:.4f} (avg)"
+
             text += (
                 f"{outcome_emoji} {side_emoji} {ai_indicator}<b>{symbol}</b> {mode_indicator} | {timestamp}\n"
-                f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
-                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}{post_sl_info}\n\n"
+                f"  PnL: ${pnl:+.2f} ({roe:+.2f}%) {entry_info}\n"
+                f"  Entry: {entry_str} → Exit: {exit_str}{post_sl_info}\n\n"
             )
 
         has_next = len(trades) == 20
@@ -349,6 +379,23 @@ Manual: {manual_trades_count} trades ({manual_winrate:.1f}% WR)
                 text += f"""
 <b>🎯 AI Confidence Performance:</b>
 High (0.7-1.0): {high_stats['count']} trades, {high_stats['winrate']:.0f}% WR
+"""
+
+        # Entry Plan статистика
+        ep_stats = stats.get('entry_plan_stats', {})
+        if ep_stats.get('ladder_count', 0) > 0:
+            ladder_count = ep_stats['ladder_count']
+            ladder_winrate = ep_stats['ladder_winrate']
+            ladder_pnl = ep_stats['ladder_pnl']
+            single_count = ep_stats.get('single_count', 0)
+            single_winrate = ep_stats.get('single_winrate', 0)
+            avg_fills = ep_stats.get('avg_entry_fills', 0)
+
+            text += f"""
+<b>📋 Entry Modes:</b>
+Ladder: {ladder_count} trades, {ladder_winrate:.0f}% WR, ${ladder_pnl:+.2f}
+Single: {single_count} trades, {single_winrate:.0f}% WR
+Avg fills/ladder: {avg_fills:.1f}
 """
 
         # Статистика по символам
