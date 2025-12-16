@@ -261,7 +261,8 @@ class TradeLogger:
         symbol: Optional[str] = None,
         side: Optional[str] = None,
         testnet: Optional[bool] = None,
-        status: Optional[str] = None
+        status: Optional[str] = None,
+        include_cancelled: bool = False
     ) -> List[TradeRecord]:
         """
         Получить историю сделок
@@ -274,6 +275,7 @@ class TradeLogger:
             side: Фильтр по направлению
             testnet: Фильтр по режиму
             status: Фильтр по статусу ("open", "partial", "closed")
+            include_cancelled: Включать отменённые сделки (по умолчанию False)
         """
         trades = []
 
@@ -296,6 +298,10 @@ class TradeLogger:
             if user_id in self.in_memory_trades:
                 all_trades = self.in_memory_trades[user_id]
                 trades = all_trades[offset:offset + limit]
+
+        # Исключаем cancelled сделки по умолчанию
+        if not include_cancelled:
+            trades = [t for t in trades if t.status != "cancelled"]
 
         # Фильтрация
         if symbol:
