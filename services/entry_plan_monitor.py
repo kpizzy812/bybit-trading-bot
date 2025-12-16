@@ -661,7 +661,13 @@ class EntryPlanMonitor:
         # === TIME CONDITIONS ===
         if "time_valid_hours" in condition or "time_exceeded" in condition:
             try:
-                created = datetime.fromisoformat(plan_created_at.replace('Z', '+00:00'))
+                # Парсим created_at с обработкой timezone
+                created_str = plan_created_at.replace('Z', '+00:00')
+                created = datetime.fromisoformat(created_str)
+                # Если datetime naive - добавляем UTC timezone
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+
                 now = datetime.now(timezone.utc)
                 hours_passed = (now - created).total_seconds() / 3600
 
@@ -1158,13 +1164,16 @@ class EntryPlanMonitor:
     async def _notify_plan_cancelled(self, plan: EntryPlan, reason: str):
         """Уведомление об отмене плана (без позиции)"""
         try:
+            # Экранируем reason заранее чтобы избежать HTML injection
+            reason_escaped = html.escape(str(reason))
+
             message = f"""
 ❌ <b>Entry Plan Cancelled</b>
 
-<b>{plan.symbol}</b> {plan.side.upper()}
+<b>{html.escape(plan.symbol)}</b> {plan.side.upper()}
 📋 Mode: {plan.mode}
 
-<b>Reason:</b> {html.escape(reason)}
+<b>Reason:</b> {reason_escaped}
 
 <i>Все ордера отменены. Позиция не открыта.</i>
 """
@@ -1181,13 +1190,14 @@ class EntryPlanMonitor:
         """Уведомление об отмене плана с частичной позицией"""
         try:
             side_emoji = "🟢" if plan.side == "Long" else "🔴"
+            reason_escaped = html.escape(str(reason))
 
             message = f"""
 ⚠️ <b>Entry Plan Cancelled (Partial Position)</b>
 
-{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
+{side_emoji} <b>{html.escape(plan.symbol)}</b> {plan.side.upper()}
 
-<b>Reason:</b> {html.escape(reason)}
+<b>Reason:</b> {reason_escaped}
 
 📊 <b>Filled:</b> {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders)})
 ⚡ <b>Avg Entry:</b> ${plan.avg_entry_price:.2f}
@@ -1210,13 +1220,14 @@ class EntryPlanMonitor:
         """Уведомление об отмене плана с закрытием маленькой позиции"""
         try:
             side_emoji = "🟢" if plan.side == "Long" else "🔴"
+            reason_escaped = html.escape(str(reason))
 
             message = f"""
 ⚠️ <b>Entry Plan Cancelled (Position Closed)</b>
 
-{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
+{side_emoji} <b>{html.escape(plan.symbol)}</b> {plan.side.upper()}
 
-<b>Reason:</b> {html.escape(reason)}
+<b>Reason:</b> {reason_escaped}
 
 📊 <b>Filled:</b> {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders)})
 ⚡ <b>Avg Entry:</b> ${plan.avg_entry_price:.2f}

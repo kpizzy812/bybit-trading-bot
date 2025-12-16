@@ -1769,3 +1769,26 @@ async def ai_refresh_scenarios(callback: CallbackQuery, state: FSMContext, setti
 
     # Повторно запросить
     await ai_analyze_market(callback, state, settings_storage)
+
+
+@router.callback_query(AIScenarioStates.confirmation, F.data.startswith("ai:scenario:"))
+async def ai_change_risk_from_confirmation(callback: CallbackQuery, state: FSMContext):
+    """Изменить риск из экрана подтверждения - вернуться к выбору риска"""
+    scenario_index = int(callback.data.split(":")[2])
+
+    data = await state.get_data()
+    scenarios = data.get("scenarios", [])
+
+    if scenario_index >= len(scenarios):
+        await callback.answer("❌ Сценарий не найден", show_alert=True)
+        return
+
+    scenario = scenarios[scenario_index]
+
+    await state.update_data(selected_scenario_index=scenario_index)
+    await state.set_state(AIScenarioStates.viewing_detail)
+
+    # Показать детали сценария с выбором риска
+    await show_scenario_detail(callback.message, scenario, scenario_index)
+
+    await callback.answer()
