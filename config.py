@@ -97,6 +97,20 @@ AI_SCENARIOS_ENABLED = os.getenv('AI_SCENARIOS_ENABLED', 'true').lower() == 'tru
 
 
 # ============================================================
+# SYNTRA SUPERVISOR
+# ============================================================
+
+# Включить Supervisor (advisory system для управления открытыми позициями)
+SUPERVISOR_ENABLED = os.getenv('SUPERVISOR_ENABLED', 'true').lower() == 'true'
+
+# Интервал синхронизации позиций с Supervisor (секунды)
+SUPERVISOR_SYNC_INTERVAL = int(os.getenv('SUPERVISOR_SYNC_INTERVAL', 60))
+
+# Минимальный уровень urgency для уведомлений (low/med/high/critical)
+SUPERVISOR_NOTIFICATION_THRESHOLD = os.getenv('SUPERVISOR_NOTIFICATION_THRESHOLD', 'med')
+
+
+# ============================================================
 # REDIS
 # ============================================================
 

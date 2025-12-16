@@ -10,6 +10,7 @@ from loguru import logger
 import config
 from bot.handlers import start, menu, positions, settings, history
 from bot.handlers import trade_wizard, ai_scenarios, scenario_editor
+from bot.handlers import supervisor as supervisor_handler
 from bot.middlewares.owner_check import OwnerCheckMiddleware
 from storage.user_settings import create_storage_instances
 from services.trade_logger import create_trade_logger
@@ -18,6 +19,7 @@ from services.order_monitor import create_order_monitor
 from services.entry_plan_monitor import create_entry_plan_monitor
 from services.breakeven_manager import create_breakeven_manager
 from services.post_sl_analyzer import create_post_sl_analyzer
+from services.supervisor_client import get_supervisor_client
 
 
 class InterceptHandler(logging.Handler):
@@ -121,6 +123,17 @@ async def main():
     await post_sl_analyzer.connect()
     logger.info("📊 Post-SL Analysis enabled")
 
+    # Инициализация supervisor client
+    supervisor_client = None
+    if config.SUPERVISOR_ENABLED:
+        logger.info("Initializing supervisor client...")
+        supervisor_client = get_supervisor_client()
+        # Health check
+        if await supervisor_client.health_check():
+            logger.info("🧠 Supervisor API connected")
+        else:
+            logger.warning("⚠️ Supervisor API not available")
+
     # Инициализация position monitor
     logger.info("Initializing position monitor...")
     position_monitor = create_position_monitor(
@@ -129,7 +142,8 @@ async def main():
         testnet=config.DEFAULT_TESTNET_MODE,
         check_interval=config.POSITION_MONITOR_INTERVAL,
         breakeven_manager=breakeven_manager,
-        post_sl_analyzer=post_sl_analyzer
+        post_sl_analyzer=post_sl_analyzer,
+        supervisor_client=supervisor_client
     )
 
     # Автоматически регистрируем owner для мониторинга
@@ -174,7 +188,8 @@ async def main():
         'order_monitor': order_monitor,
         'entry_plan_monitor': entry_plan_monitor,
         'breakeven_manager': breakeven_manager,
-        'post_sl_analyzer': post_sl_analyzer
+        'post_sl_analyzer': post_sl_analyzer,
+        'supervisor_client': supervisor_client
     })
 
     # Регистрация middleware
@@ -197,6 +212,11 @@ async def main():
         logger.info("🤖 AI Scenarios enabled")
 
     dp.include_router(trade_wizard.router)
+
+    # Supervisor handlers (если включено)
+    if config.SUPERVISOR_ENABLED:
+        dp.include_router(supervisor_handler.router)
+        logger.info("🧠 Supervisor handlers registered")
 
     # Запуск бота
     logger.info("Starting bot...")

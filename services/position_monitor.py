@@ -21,6 +21,7 @@ from services.trade_logger import TradeLogger
 if TYPE_CHECKING:
     from services.breakeven_manager import BreakevenManager
     from services.post_sl_analyzer import PostSLAnalyzer
+    from services.supervisor_client import SupervisorClient
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,8 @@ class PositionMonitor:
         check_interval: int = 15,  # Интервал проверки в секундах
         testnet: bool = False,
         breakeven_manager: Optional['BreakevenManager'] = None,
-        post_sl_analyzer: Optional['PostSLAnalyzer'] = None
+        post_sl_analyzer: Optional['PostSLAnalyzer'] = None,
+        supervisor_client: Optional['SupervisorClient'] = None
     ):
         self.bot = bot
         self.trade_logger = trade_logger
@@ -70,6 +72,7 @@ class PositionMonitor:
         self.testnet = testnet
         self.breakeven_manager = breakeven_manager
         self.post_sl_analyzer = post_sl_analyzer
+        self.supervisor_client = supervisor_client
 
         # Создаем клиент один раз
         self.client = BybitClient(testnet=testnet)
@@ -80,6 +83,10 @@ class PositionMonitor:
 
         # Активные user_id для мониторинга
         self.active_users: Set[int] = set()
+
+        # Счётчик для supervisor sync (каждые N итераций)
+        self._supervisor_sync_counter = 0
+        self._supervisor_sync_interval = 4  # sync каждые 4 итерации (60 сек при 15 сек интервале)
 
         self._running = False
         self._task: Optional[asyncio.Task] = None
@@ -93,6 +100,11 @@ class PositionMonitor:
         """Установить PostSLAnalyzer после инициализации"""
         self.post_sl_analyzer = post_sl_analyzer
         logger.info("PostSLAnalyzer connected to PositionMonitor")
+
+    def set_supervisor_client(self, supervisor_client: 'SupervisorClient'):
+        """Установить SupervisorClient после инициализации"""
+        self.supervisor_client = supervisor_client
+        logger.info("SupervisorClient connected to PositionMonitor")
 
     def register_user(self, user_id: int):
         """Зарегистрировать пользователя для мониторинга"""
@@ -132,6 +144,13 @@ class PositionMonitor:
         while self._running:
             try:
                 await self._check_all_users()
+
+                # Supervisor sync каждые N итераций
+                self._supervisor_sync_counter += 1
+                if self._supervisor_sync_counter >= self._supervisor_sync_interval:
+                    self._supervisor_sync_counter = 0
+                    await self._supervisor_sync_all_users()
+
             except Exception as e:
                 logger.error(f"Error in monitor loop: {e}", exc_info=True)
 
@@ -169,6 +188,93 @@ class PositionMonitor:
 
         except Exception as e:
             logger.error(f"Error checking positions for user {user_id}: {e}")
+
+    async def _supervisor_sync_all_users(self):
+        """Sync positions with Supervisor API for all users"""
+        import config as cfg
+        if not self.supervisor_client or not cfg.SUPERVISOR_ENABLED:
+            return
+
+        from services.supervisor_client import PositionSnapshot as SupervisorSnapshot
+        from bot.handlers.supervisor import send_advice_notification, cache_advice
+
+        for user_id in list(self.active_users):
+            try:
+                # Get current positions from cache
+                positions = self.positions_cache.get(user_id, {})
+                if not positions:
+                    continue
+
+                # Convert to supervisor snapshots
+                supervisor_snapshots = []
+                for key, snapshot in positions.items():
+                    # Get trade_id from trade logger
+                    trade = await self.trade_logger.get_open_trade_by_symbol(
+                        user_id=user_id,
+                        symbol=snapshot.symbol,
+                        testnet=self.testnet
+                    )
+                    trade_id = trade.trade_id if trade else f"auto_{snapshot.symbol}_{snapshot.side}"
+
+                    # Calculate PnL %
+                    pnl_pct = 0
+                    if snapshot.entry_price > 0:
+                        if snapshot.side == "Buy":
+                            pnl_pct = ((snapshot.mark_price - snapshot.entry_price) / snapshot.entry_price) * 100
+                        else:
+                            pnl_pct = ((snapshot.entry_price - snapshot.mark_price) / snapshot.entry_price) * 100
+
+                    sup_snapshot = SupervisorSnapshot(
+                        trade_id=trade_id,
+                        symbol=snapshot.symbol,
+                        side="Long" if snapshot.side == "Buy" else "Short",
+                        qty=snapshot.size,
+                        entry_price=snapshot.entry_price,
+                        mark_price=snapshot.mark_price,
+                        unrealized_pnl=snapshot.unrealized_pnl,
+                        pnl_pct=pnl_pct,
+                        leverage=int(snapshot.leverage) if snapshot.leverage else 1,
+                        liq_price=float(snapshot.liq_price) if snapshot.liq_price else None,
+                        sl_current=float(snapshot.stop_loss) if snapshot.stop_loss else None,
+                        tp_current=None,  # TODO: parse TP list if available
+                        updated_at=datetime.utcnow().isoformat() + "Z"
+                    )
+                    supervisor_snapshots.append(sup_snapshot)
+
+                # Sync with API
+                if supervisor_snapshots:
+                    advice_packs = await self.supervisor_client.sync_positions(
+                        user_id=user_id,
+                        positions=supervisor_snapshots
+                    )
+
+                    # Send notifications for advice packs
+                    for advice in advice_packs:
+                        # Check urgency threshold
+                        urgency = advice.risk_state if hasattr(advice, 'risk_state') else 'low'
+                        if self._should_notify(urgency):
+                            await send_advice_notification(self.bot, user_id, advice)
+
+            except Exception as e:
+                logger.warning(f"Supervisor sync error for user {user_id}: {e}")
+
+    def _should_notify(self, risk_state: str) -> bool:
+        """Check if notification should be sent based on urgency threshold"""
+        import config as cfg
+        threshold = cfg.SUPERVISOR_NOTIFICATION_THRESHOLD.lower()
+
+        urgency_levels = {
+            'low': 0,
+            'med': 1,
+            'medium': 1,
+            'high': 2,
+            'critical': 3
+        }
+
+        threshold_level = urgency_levels.get(threshold, 1)
+        risk_level = urgency_levels.get(risk_state.lower(), 0)
+
+        return risk_level >= threshold_level
 
     async def _detect_changes(
         self,
@@ -500,7 +606,8 @@ def create_position_monitor(
     testnet: bool = False,
     check_interval: int = 15,
     breakeven_manager: Optional['BreakevenManager'] = None,
-    post_sl_analyzer: Optional['PostSLAnalyzer'] = None
+    post_sl_analyzer: Optional['PostSLAnalyzer'] = None,
+    supervisor_client: Optional['SupervisorClient'] = None
 ) -> PositionMonitor:
     """Создать экземпляр PositionMonitor"""
     return PositionMonitor(
@@ -509,5 +616,6 @@ def create_position_monitor(
         check_interval=check_interval,
         testnet=testnet,
         breakeven_manager=breakeven_manager,
-        post_sl_analyzer=post_sl_analyzer
+        post_sl_analyzer=post_sl_analyzer,
+        supervisor_client=supervisor_client
     )
