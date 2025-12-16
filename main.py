@@ -9,7 +9,7 @@ from loguru import logger
 
 import config
 from bot.handlers import start, menu, positions, settings, history
-from bot.handlers import trade_wizard, ai_scenarios
+from bot.handlers import trade_wizard, ai_scenarios, scenario_editor
 from bot.middlewares.owner_check import OwnerCheckMiddleware
 from storage.user_settings import create_storage_instances
 from services.trade_logger import create_trade_logger
@@ -193,6 +193,7 @@ async def main():
     # AI Scenarios (если включено)
     if config.AI_SCENARIOS_ENABLED:
         dp.include_router(ai_scenarios.router)
+        dp.include_router(scenario_editor.router)
         logger.info("🤖 AI Scenarios enabled")
 
     dp.include_router(trade_wizard.router)

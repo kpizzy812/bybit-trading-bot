@@ -179,10 +179,10 @@ def get_confirm_trade_keyboard(scenario_index: int, risk_usd: float) -> InlineKe
         callback_data=f"ai:confirm:{scenario_index}:{risk_usd}"
     )
 
-    # Редактирование уровней
+    # Редактирование сценария
     builder.button(
-        text="✏️ Override SL",
-        callback_data=f"ai:edit_sl:{scenario_index}"
+        text="✏️ Редактировать",
+        callback_data=f"ai:edit_scenario:{scenario_index}"
     )
 
     # Изменить риск
@@ -198,5 +198,166 @@ def get_confirm_trade_keyboard(scenario_index: int, risk_usd: float) -> InlineKe
     )
 
     builder.adjust(1)
+
+    return builder.as_markup()
+
+
+def get_edit_scenario_keyboard(scenario: Dict[str, Any]) -> InlineKeyboardMarkup:
+    """
+    Клавиатура экрана редактирования сценария
+
+    Args:
+        scenario: Данные сценария
+
+    Returns:
+        InlineKeyboardMarkup с параметрами для редактирования
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Entry
+    entry = scenario.get("entry", {})
+    entry_min = entry.get("price_min", 0)
+    entry_max = entry.get("price_max", 0)
+    entry_price = (entry_min + entry_max) / 2
+    entry_overridden = entry.get("overridden", False)
+    entry_mark = " ✏️" if entry_overridden else ""
+    builder.button(
+        text=f"⚡ Entry: ${entry_price:.2f}{entry_mark}",
+        callback_data="ai:edit:entry"
+    )
+
+    # Stop Loss
+    stop_loss = scenario.get("stop_loss", {})
+    stop_price = stop_loss.get("recommended", 0)
+    sl_overridden = stop_loss.get("overridden", False)
+    sl_mark = " ✏️" if sl_overridden else ""
+    builder.button(
+        text=f"🛑 Stop Loss: ${stop_price:.2f}{sl_mark}",
+        callback_data="ai:edit:sl"
+    )
+
+    # Take Profit (показываем количество уровней)
+    targets = scenario.get("targets", [])
+    tp_count = len(targets)
+    any_tp_overridden = any(t.get("overridden", False) for t in targets)
+    tp_mark = " ✏️" if any_tp_overridden else ""
+    builder.button(
+        text=f"🎯 Take Profit ({tp_count} уровней){tp_mark}",
+        callback_data="ai:edit:tp"
+    )
+
+    # Leverage
+    leverage = scenario.get("leverage", {})
+    lev_value = leverage.get("recommended", "5x") if isinstance(leverage, dict) else f"{leverage}x"
+    lev_overridden = leverage.get("overridden", False) if isinstance(leverage, dict) else False
+    lev_mark = " ✏️" if lev_overridden else ""
+    builder.button(
+        text=f"📊 Leverage: {lev_value}{lev_mark}",
+        callback_data="ai:edit:leverage"
+    )
+
+    # Разделитель
+    builder.button(text="─────────────", callback_data="ai:noop")
+
+    # Назад к подтверждению
+    builder.button(
+        text="✅ Готово",
+        callback_data="ai:edit:done"
+    )
+
+    # Сбросить изменения
+    builder.button(
+        text="🔄 Сбросить всё",
+        callback_data="ai:edit:reset"
+    )
+
+    builder.adjust(1)
+
+    return builder.as_markup()
+
+
+def get_edit_entry_cancel_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура отмены редактирования Entry"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="❌ Отмена", callback_data="ai:edit:cancel")
+    return builder.as_markup()
+
+
+def get_edit_tp_keyboard(targets: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора TP уровня для редактирования
+
+    Args:
+        targets: Список TP уровней
+
+    Returns:
+        InlineKeyboardMarkup с TP уровнями
+    """
+    builder = InlineKeyboardBuilder()
+
+    for idx, target in enumerate(targets):
+        tp_price = target.get("price", 0)
+        partial_pct = target.get("partial_close_pct", 100)
+        rr = target.get("rr", 0)
+        overridden = target.get("overridden", False)
+        mark = " ✏️" if overridden else ""
+
+        builder.button(
+            text=f"TP{idx+1}: ${tp_price:.2f} ({partial_pct}%) RR {rr:.1f}{mark}",
+            callback_data=f"ai:edit:tp:{idx}"
+        )
+
+    # Добавить новый TP
+    if len(targets) < 5:
+        builder.button(text="➕ Добавить TP", callback_data="ai:edit:tp:add")
+
+    # Назад
+    builder.button(text="🔙 Назад", callback_data="ai:edit:back")
+
+    builder.adjust(1)
+
+    return builder.as_markup()
+
+
+def get_edit_tp_level_cancel_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура отмены редактирования TP уровня"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑 Удалить TP", callback_data="ai:edit:tp:delete")
+    builder.button(text="❌ Отмена", callback_data="ai:edit:tp:cancel")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def get_edit_leverage_keyboard(current: int, max_safe: int = 20) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора Leverage
+
+    Args:
+        current: Текущее плечо
+        max_safe: Максимально безопасное плечо
+
+    Returns:
+        InlineKeyboardMarkup с вариантами плеча
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Стандартные варианты плеча
+    leverage_options = [3, 5, 7, 10, 15, 20]
+
+    for lev in leverage_options:
+        if lev <= max_safe:
+            is_current = "✓ " if lev == current else ""
+            builder.button(
+                text=f"{is_current}{lev}x",
+                callback_data=f"ai:edit:lev:{lev}"
+            )
+
+    # Custom
+    builder.button(text="✏️ Custom", callback_data="ai:edit:lev:custom")
+
+    # Назад
+    builder.button(text="🔙 Назад", callback_data="ai:edit:back")
+
+    builder.adjust(3, 3, 2)
 
     return builder.as_markup()

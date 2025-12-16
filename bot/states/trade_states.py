@@ -10,7 +10,7 @@ class AIScenarioStates(StatesGroup):
     2. Просмотр сценариев от Syntra AI
     3. Выбор сценария
     4. Выбор риска ($5, $10, $20, $50, custom)
-    5. Опциональное редактирование SL/TP
+    5. Опциональное редактирование параметров
     6. Подтверждение и execute
     """
 
@@ -21,6 +21,13 @@ class AIScenarioStates(StatesGroup):
     entering_custom_risk = State()  # Шаг 5: Ввод custom риска
     editing_sl = State()            # Шаг 5b: Override SL (кастомный стоп)
     confirmation = State()          # Шаг 6: Подтверждение
+
+    # Редактирование сценария
+    editing_scenario = State()      # Экран выбора параметра для редактирования
+    editing_entry = State()         # Редактирование Entry Price
+    editing_tp = State()            # Редактирование Take Profit
+    editing_tp_level = State()      # Редактирование конкретного TP уровня
+    editing_leverage = State()      # Редактирование Leverage
 
 
 class TradeStates(StatesGroup):
