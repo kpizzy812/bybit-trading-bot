@@ -566,29 +566,33 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
                 tp_rr_2 = data.get('tp_rr_2', 3.0)
                 rr_planned = (tp_rr_1 + tp_rr_2) / 2
 
+            # Рассчитываем margin и fee
+            from services.trade_logger import calculate_fee, calculate_margin
+            margin_usd = calculate_margin(actual_entry_price, actual_qty, leverage)
+            # Market order = taker fee, Limit = maker fee
+            is_market = order_type == "Market"
+            entry_fee = calculate_fee(actual_entry_price, actual_qty, is_taker=is_market)
+
             # Создаем запись о сделке
             trade_record = TradeRecord(
                 trade_id=trade_id,
                 user_id=user_id,
-                timestamp=datetime.utcnow().isoformat(),
                 symbol=symbol,
-                side=position_side,  # Long/Short для логов
+                side=position_side,  # Long/Short
+                opened_at=datetime.utcnow().isoformat(),
                 entry_price=actual_entry_price,
-                exit_price=None,  # Будет заполнено при закрытии
                 qty=actual_qty,
                 leverage=leverage,
                 margin_mode=settings.default_margin_mode,
+                margin_usd=margin_usd,
                 stop_price=stop_price,
-                tp_price=tp_price_for_log,
                 risk_usd=actual_risk,
-                pnl_usd=None,  # Будет заполнено при закрытии
-                pnl_percent=None,  # Будет заполнено при закрытии
-                roe_percent=None,  # Будет заполнено при закрытии
-                outcome=None,  # Будет заполнено при закрытии
+                tp_price=tp_price_for_log,
                 rr_planned=rr_planned,
-                rr_actual=None,  # Будет заполнено при закрытии
-                status="open",  # Статус: открыта
-                testnet=testnet_mode  # Режим торговли
+                entry_fee_usd=entry_fee,
+                total_fees_usd=entry_fee,
+                status="open",
+                testnet=testnet_mode
             )
 
             # Логируем сделку

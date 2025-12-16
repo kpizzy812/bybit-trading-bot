@@ -160,10 +160,13 @@ class OrderMonitor:
             # 1. Зарегистрировать вход в позицию в trade_logger
             try:
                 from datetime import datetime as dt
-                from services.trade_logger import TradeRecord
+                from services.trade_logger import TradeRecord, calculate_fee, calculate_margin
                 import uuid
 
                 actual_risk = abs(actual_entry_price - order.stop_price) * actual_qty
+                margin_usd = calculate_margin(actual_entry_price, actual_qty, order.leverage)
+                # Limit order = maker fee
+                entry_fee = calculate_fee(actual_entry_price, actual_qty, is_taker=False)
 
                 # TP price для лога
                 tp_price_for_log = None
@@ -179,26 +182,26 @@ class OrderMonitor:
                     if rrs:
                         rr_planned = sum(rrs) / len(rrs)
 
+                # Преобразуем side в Long/Short для консистентности
+                position_side = "Long" if order.side == "Buy" else "Short"
+
                 trade_record = TradeRecord(
                     trade_id=str(uuid.uuid4()),
                     user_id=user_id,
-                    timestamp=dt.utcnow().isoformat(),
                     symbol=order.symbol,
-                    side=order.side,
+                    side=position_side,
+                    opened_at=dt.utcnow().isoformat(),
                     entry_price=actual_entry_price,
-                    exit_price=None,
                     qty=actual_qty,
                     leverage=order.leverage,
                     margin_mode="cross",
+                    margin_usd=margin_usd,
                     stop_price=order.stop_price,
-                    tp_price=tp_price_for_log,
                     risk_usd=actual_risk,
-                    pnl_usd=None,
-                    pnl_percent=None,
-                    roe_percent=None,
-                    outcome=None,
+                    tp_price=tp_price_for_log,
                     rr_planned=rr_planned,
-                    rr_actual=None,
+                    entry_fee_usd=entry_fee,
+                    total_fees_usd=entry_fee,
                     status="open",
                     testnet=order.testnet
                 )

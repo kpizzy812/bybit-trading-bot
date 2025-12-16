@@ -189,6 +189,9 @@ class PositionMonitor:
                 if new_snapshot.size < old_snapshot.size:
                     # Частичное закрытие
                     await self._handle_partial_close(user_id, old_snapshot, new_snapshot)
+                else:
+                    # Позиция не изменилась — обновляем MAE/MFE
+                    await self._update_mae_mfe_for_position(user_id, new_snapshot)
 
     async def _handle_position_closed(self, user_id: int, snapshot: PositionSnapshot):
         """Обработка полного закрытия позиции"""
@@ -206,18 +209,39 @@ class PositionMonitor:
         if position_value > 0:
             roe_percent = (pnl_usd / position_value) * float(snapshot.leverage) * 100
 
+        # Находим trade_id по символу
+        trade = await self.trade_logger.get_open_trade_by_symbol(
+            user_id=user_id,
+            symbol=snapshot.symbol,
+            testnet=self.testnet
+        )
+        trade_id = trade.trade_id if trade else None
+
         # Логируем в TradeLogger
-        try:
-            await self.trade_logger.update_trade_on_close(
-                user_id=user_id,
-                symbol=snapshot.symbol,
-                exit_price=exit_price,
-                pnl_usd=pnl_usd,
-                is_partial=False,
-                testnet=self.testnet
-            )
-        except Exception as e:
-            logger.error(f"Failed to log closed position: {e}")
+        if trade_id:
+            try:
+                # Определяем reason для fills
+                fill_reason = self._map_close_reason_to_fill(reason)
+
+                await self.trade_logger.update_trade_on_close(
+                    user_id=user_id,
+                    trade_id=trade_id,
+                    exit_price=exit_price,
+                    pnl_usd=pnl_usd,
+                    closed_qty=snapshot.size,
+                    reason=fill_reason,
+                    is_final=True,
+                    is_taker=True,  # SL/TP обычно taker
+                    testnet=self.testnet
+                )
+
+                # Финализируем MAE/MFE
+                await self.trade_logger.finalize_mae_mfe(user_id, trade_id, self.testnet)
+
+            except Exception as e:
+                logger.error(f"Failed to log closed position: {e}")
+        else:
+            logger.warning(f"No open trade found for {snapshot.symbol} to update on close")
 
         # Очищаем статус breakeven для этой позиции
         if self.breakeven_manager:
@@ -225,12 +249,8 @@ class PositionMonitor:
 
         # === POST-SL ANALYSIS ===
         # Если закрытие по Stop Loss, регистрируем для анализа
-        if reason == "Stop Loss" and self.post_sl_analyzer:
+        if reason == "Stop Loss" and self.post_sl_analyzer and trade_id:
             try:
-                # Получаем trade_id из trade_logger
-                trades = await self.trade_logger.get_trades(user_id, limit=1, testnet=self.testnet)
-                trade_id = trades[0].trade_id if trades else f"sl_{snapshot.symbol}_{datetime.utcnow().timestamp()}"
-
                 await self.post_sl_analyzer.register_sl_hit(
                     trade_id=trade_id,
                     user_id=user_id,
@@ -271,19 +291,32 @@ class PositionMonitor:
 
         exit_price = new_snapshot.mark_price
 
+        # Находим trade_id
+        trade = await self.trade_logger.get_open_trade_by_symbol(
+            user_id=user_id,
+            symbol=old_snapshot.symbol,
+            testnet=self.testnet
+        )
+        trade_id = trade.trade_id if trade else None
+
         # Логируем
-        try:
-            await self.trade_logger.update_trade_on_close(
-                user_id=user_id,
-                symbol=old_snapshot.symbol,
-                exit_price=exit_price,
-                pnl_usd=partial_pnl,
-                closed_qty=closed_size,
-                is_partial=True,
-                testnet=self.testnet
-            )
-        except Exception as e:
-            logger.error(f"Failed to log partial close: {e}")
+        if trade_id:
+            try:
+                await self.trade_logger.update_trade_on_close(
+                    user_id=user_id,
+                    trade_id=trade_id,
+                    exit_price=exit_price,
+                    pnl_usd=partial_pnl,
+                    closed_qty=closed_size,
+                    reason="tp1",  # Partial = TP level
+                    is_final=False,
+                    is_taker=True,
+                    testnet=self.testnet
+                )
+            except Exception as e:
+                logger.error(f"Failed to log partial close: {e}")
+        else:
+            logger.warning(f"No open trade found for {old_snapshot.symbol} to update on partial close")
 
         # === AUTO BREAKEVEN ===
         # Если это partial close в плюсе, переносим SL на breakeven
@@ -353,6 +386,35 @@ class PositionMonitor:
 
         # Иначе - закрытие по рынку
         return "Market Close"
+
+    def _map_close_reason_to_fill(self, reason: str) -> str:
+        """Преобразовать причину закрытия в reason для TradeFill"""
+        mapping = {
+            "Stop Loss": "sl",
+            "Take Profit": "tp1",
+            "Partial TP": "tp1",
+            "Liquidation": "liquidation",
+            "Market Close": "manual"
+        }
+        return mapping.get(reason, "manual")
+
+    async def _update_mae_mfe_for_position(self, user_id: int, snapshot: PositionSnapshot):
+        """Обновить MAE/MFE для открытой позиции"""
+        try:
+            trade = await self.trade_logger.get_open_trade_by_symbol(
+                user_id=user_id,
+                symbol=snapshot.symbol,
+                testnet=self.testnet
+            )
+            if trade:
+                await self.trade_logger.update_mae_mfe(
+                    user_id=user_id,
+                    trade_id=trade.trade_id,
+                    current_price=snapshot.mark_price,
+                    testnet=self.testnet
+                )
+        except Exception as e:
+            logger.debug(f"MAE/MFE update error for {snapshot.symbol}: {e}")
 
     async def _send_close_notification(
         self,

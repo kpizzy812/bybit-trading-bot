@@ -834,6 +834,8 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 
         # Зарегистрировать вход в позицию в trade_logger
         try:
+            from services.trade_logger import calculate_fee, calculate_margin
+
             # TP price для лога - первый таргет или None
             tp_price_for_log = None
             rr_planned = None
@@ -849,31 +851,46 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                 if rrs:
                     rr_planned = sum(rrs) / len(rrs)
 
+            # Рассчитываем margin и fee
+            margin_usd = calculate_margin(actual_entry_price, actual_qty, leverage)
+            entry_fee = calculate_fee(actual_entry_price, actual_qty, is_taker=True)  # Market = taker
+
+            # Преобразуем side в Long/Short
+            position_side = "Long" if side == "Buy" else "Short"
+
+            # Генерируем scenario_id для связки с AI
+            scenario_uuid = str(uuid.uuid4())
+
             trade_record = TradeRecord(
                 trade_id=trade_id,
                 user_id=user_id,
-                timestamp=datetime.utcnow().isoformat(),
                 symbol=symbol,
-                side=side,
+                side=position_side,
+                opened_at=datetime.utcnow().isoformat(),
                 entry_price=actual_entry_price,
-                exit_price=None,
                 qty=actual_qty,
                 leverage=leverage,
                 margin_mode=settings.default_margin_mode,
+                margin_usd=margin_usd,
                 stop_price=stop_price,
-                tp_price=tp_price_for_log,
                 risk_usd=actual_risk,
-                pnl_usd=None,
-                pnl_percent=None,
-                roe_percent=None,
-                outcome=None,
+                tp_price=tp_price_for_log,
                 rr_planned=rr_planned,
-                rr_actual=None,
+                entry_fee_usd=entry_fee,
+                total_fees_usd=entry_fee,
                 status="open",
-                testnet=testnet_mode  # Режим торговли
+                testnet=testnet_mode,
+                # AI Scenario fields
+                scenario_id=scenario_uuid,
+                scenario_source="syntra",
+                scenario_bias=scenario.get("bias"),
+                scenario_confidence=scenario.get("confidence"),
+                timeframe=data.get("timeframe"),
+                entry_reason=scenario.get("name"),
+                scenario_snapshot=scenario  # Сохраняем весь сценарий
             )
             await trade_logger.log_trade(trade_record)
-            logger.info(f"Trade entry logged for {symbol} @ ${actual_entry_price:.2f}")
+            logger.info(f"Trade entry logged for {symbol} @ ${actual_entry_price:.2f} (scenario: {scenario_uuid})")
         except Exception as log_error:
             logger.error(f"Failed to log trade entry: {log_error}")
 

@@ -79,7 +79,10 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger, settings_sto
             outcome = trade.outcome or "open"
             pnl = trade.pnl_usd or 0
             roe = trade.roe_percent or 0
-            timestamp = datetime.fromisoformat(trade.timestamp).strftime("%d.%m %H:%M")
+
+            # Используем opened_at или closed_at для timestamp
+            trade_time = getattr(trade, 'opened_at', None) or getattr(trade, 'closed_at', None)
+            timestamp = datetime.fromisoformat(trade_time).strftime("%d.%m %H:%M") if trade_time else "?"
 
             # Эмодзи
             side_emoji = "🟢" if side in ("Buy", "Long") else "🔴"
@@ -87,8 +90,10 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger, settings_sto
                 outcome_emoji = "✅"
             elif outcome == "loss":
                 outcome_emoji = "❌"
-            elif outcome == "open":
+            elif trade.status == "open":
                 outcome_emoji = "⏳"
+            elif trade.status == "partial":
+                outcome_emoji = "🔄"
             else:
                 outcome_emoji = "➖"
 
@@ -98,6 +103,19 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger, settings_sto
             # Индикатор режима (testnet/live)
             mode_indicator = "🧪" if getattr(trade, 'testnet', False) else "💰"
 
+            # AI scenario индикатор
+            ai_indicator = ""
+            scenario_source = getattr(trade, 'scenario_source', 'manual')
+            if scenario_source == 'syntra':
+                conf = getattr(trade, 'scenario_confidence', 0) or 0
+                ai_indicator = f"🤖{conf*100:.0f}% "
+
+            # Fills info
+            fills_info = ""
+            fills = getattr(trade, 'fills', None)
+            if fills and len(fills) > 1:
+                fills_info = f" ({len(fills)} fills)"
+
             # Post-SL Analysis индикатор
             post_sl_info = ""
             if hasattr(trade, 'sl_was_correct') and trade.sl_was_correct is not None:
@@ -105,10 +123,17 @@ async def show_recent_trades(callback: CallbackQuery, trade_logger, settings_sto
                 move = getattr(trade, 'post_sl_move_pct', 0) or 0
                 post_sl_info = f"\n  {sl_emoji} Post-SL: {move:+.1f}%"
 
+            # MAE/MFE info
+            mae_mfe_info = ""
+            mae_r = getattr(trade, 'mae_r', None)
+            mfe_r = getattr(trade, 'mfe_r', None)
+            if mae_r is not None and mfe_r is not None:
+                mae_mfe_info = f"\n  MAE: {mae_r:.2f}R | MFE: {mfe_r:.2f}R"
+
             text += (
-                f"{outcome_emoji} {side_emoji} <b>{symbol}</b> {mode_indicator} | {timestamp}\n"
-                f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
-                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}{post_sl_info}\n\n"
+                f"{outcome_emoji} {side_emoji} {ai_indicator}<b>{symbol}</b> {mode_indicator} | {timestamp}\n"
+                f"  PnL: ${pnl:+.2f} ({roe:+.2f}%){fills_info}\n"
+                f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}{post_sl_info}{mae_mfe_info}\n\n"
             )
 
         # Проверяем, есть ли ещё сделки
@@ -159,15 +184,20 @@ async def show_trades_page(callback: CallbackQuery, trade_logger, settings_stora
             outcome = trade.outcome or "open"
             pnl = trade.pnl_usd or 0
             roe = trade.roe_percent or 0
-            timestamp = datetime.fromisoformat(trade.timestamp).strftime("%d.%m %H:%M")
+
+            # Используем opened_at или closed_at
+            trade_time = getattr(trade, 'opened_at', None) or getattr(trade, 'closed_at', None)
+            timestamp = datetime.fromisoformat(trade_time).strftime("%d.%m %H:%M") if trade_time else "?"
 
             side_emoji = "🟢" if side in ("Buy", "Long") else "🔴"
             if outcome == "win":
                 outcome_emoji = "✅"
             elif outcome == "loss":
                 outcome_emoji = "❌"
-            elif outcome == "open":
+            elif trade.status == "open":
                 outcome_emoji = "⏳"
+            elif trade.status == "partial":
+                outcome_emoji = "🔄"
             else:
                 outcome_emoji = "➖"
 
@@ -175,6 +205,12 @@ async def show_trades_page(callback: CallbackQuery, trade_logger, settings_stora
 
             # Индикатор режима (testnet/live)
             mode_indicator = "🧪" if getattr(trade, 'testnet', False) else "💰"
+
+            # AI indicator
+            ai_indicator = ""
+            if getattr(trade, 'scenario_source', 'manual') == 'syntra':
+                conf = getattr(trade, 'scenario_confidence', 0) or 0
+                ai_indicator = f"🤖{conf*100:.0f}% "
 
             # Post-SL Analysis индикатор
             post_sl_info = ""
@@ -184,7 +220,7 @@ async def show_trades_page(callback: CallbackQuery, trade_logger, settings_stora
                 post_sl_info = f"\n  {sl_emoji} Post-SL: {move:+.1f}%"
 
             text += (
-                f"{outcome_emoji} {side_emoji} <b>{symbol}</b> {mode_indicator} | {timestamp}\n"
+                f"{outcome_emoji} {side_emoji} {ai_indicator}<b>{symbol}</b> {mode_indicator} | {timestamp}\n"
                 f"  PnL: ${pnl:+.2f} ({roe:+.2f}%)\n"
                 f"  Entry: ${trade.entry_price:.4f} → Exit: {exit_str}{post_sl_info}\n\n"
             )
@@ -255,6 +291,16 @@ async def show_statistics(callback: CallbackQuery, trade_logger, settings_storag
         max_win_streak = stats.get('max_win_streak', 0)
         max_loss_streak = stats.get('max_loss_streak', 0)
 
+        # v2 metrics
+        total_fees = stats.get('total_fees', 0)
+        net_pnl = stats.get('net_pnl', total_pnl)
+        avg_mae_r = stats.get('avg_mae_r', 0)
+        avg_mfe_r = stats.get('avg_mfe_r', 0)
+        ai_trades_count = stats.get('ai_trades_count', 0)
+        ai_winrate = stats.get('ai_winrate', 0)
+        manual_trades_count = stats.get('manual_trades_count', 0)
+        manual_winrate = stats.get('manual_winrate', 0)
+
         # Форматируем profit factor
         pf_str = f"{profit_factor:.2f}" if profit_factor != float('inf') else "∞"
 
@@ -270,12 +316,14 @@ async def show_statistics(callback: CallbackQuery, trade_logger, settings_storag
 ✅ <b>Winrate:</b> {winrate:.1f}% ({win_count}W/{loss_count}L)
 
 <b>💰 PnL:</b>
-Общий: ${total_pnl:+.2f}
+Gross: ${total_pnl:+.2f} | Fees: ${total_fees:.2f}
+<b>Net PnL: ${net_pnl:+.2f}</b>
 Avg Win: ${avg_win:.2f} | Avg Loss: ${avg_loss:.2f}
 Best: ${best:+.2f} | Worst: ${worst:+.2f}
 
 <b>📈 Risk/Reward:</b>
 Средний RR: {avg_rr:.2f}
+Avg MAE: {avg_mae_r:.2f}R | Avg MFE: {avg_mfe_r:.2f}R
 
 <b>🔥 Streaks:</b>
 Win streak: {max_win_streak} | Loss streak: {max_loss_streak}
@@ -283,6 +331,24 @@ Win streak: {max_win_streak} | Loss streak: {max_loss_streak}
 <b>📊 Направления:</b>
 🟢 Long: {long_trades} ({long_trades/total*100:.1f}%)
 🔴 Short: {short_trades} ({short_trades/total*100:.1f}%)
+"""
+
+        # AI vs Manual comparison
+        if ai_trades_count > 0 or manual_trades_count > 0:
+            text += f"""
+<b>🤖 AI vs Manual:</b>
+AI: {ai_trades_count} trades ({ai_winrate:.1f}% WR)
+Manual: {manual_trades_count} trades ({manual_winrate:.1f}% WR)
+"""
+
+        # Confidence buckets
+        confidence_stats = stats.get('confidence_stats', {})
+        if confidence_stats:
+            high_stats = confidence_stats.get('high', {})
+            if high_stats.get('count', 0) > 0:
+                text += f"""
+<b>🎯 AI Confidence Performance:</b>
+High (0.7-1.0): {high_stats['count']} trades, {high_stats['winrate']:.0f}% WR
 """
 
         # Статистика по символам
