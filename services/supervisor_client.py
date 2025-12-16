@@ -168,10 +168,11 @@ class SupervisorClient:
                     for advice_data in data.get("advices", []):
                         advices.append(AdvicePack.from_dict(advice_data))
 
-                    logger.info(
-                        f"Supervisor sync: {len(positions)} positions, "
-                        f"{len(advices)} advice packs"
-                    )
+                    # Only log when we have advice (avoid spam)
+                    if advices:
+                        logger.info(
+                            f"Supervisor: {len(advices)} advice packs for {len(positions)} positions"
+                        )
 
                     return advices
 
