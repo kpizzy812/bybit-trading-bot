@@ -182,6 +182,15 @@ class EntryPlan:
     def from_dict(cls, data: Dict) -> 'EntryPlan':
         valid_fields = {f.name for f in fields(cls)}
         filtered = {k: v for k, v in data.items() if k in valid_fields}
+
+        # Миграция: обработка None для boolean полей (старые планы)
+        if filtered.get('sl_set') is None:
+            filtered['sl_set'] = False
+        if filtered.get('tp_set') is None:
+            filtered['tp_set'] = False
+        if filtered.get('tp_filled_qty_at_set') is None:
+            filtered['tp_filled_qty_at_set'] = 0.0
+
         return cls(**filtered)
 
     def get_orders(self) -> List[EntryOrder]:
