@@ -37,6 +37,7 @@ from services.bybit import BybitClient
 from services.risk_calculator import RiskCalculator
 from services.trade_logger import TradeRecord
 from services.entry_plan import EntryPlan, EntryOrder
+from services.scenarios_cache import get_scenarios_cache
 from utils.validators import round_qty, round_price
 
 router = Router()
@@ -396,14 +397,38 @@ async def ai_scenarios_start(message: Message, state: FSMContext):
         )
         return
 
+    user_id = message.from_user.id
+
+    # Получить закэшированные пары
+    cache = get_scenarios_cache()
+    cached_pairs_raw = cache.get_user_cached_pairs(user_id)
+
+    # Конвертировать в формат (symbol, timeframe, age_mins)
+    cached_pairs = []
+    for symbol, timeframe, cached_at in cached_pairs_raw:
+        age_mins = int((datetime.utcnow() - cached_at).total_seconds() / 60)
+        cached_pairs.append((symbol, timeframe, age_mins))
+
+    # Сортировать по времени (самые свежие первыми)
+    cached_pairs.sort(key=lambda x: x[2])
+
     await state.set_state(AIScenarioStates.choosing_symbol)
 
-    await message.answer(
+    # Формируем текст
+    text = (
         "🤖 <b>AI Trading Scenarios</b>\n\n"
         "Syntra AI проанализирует рынок и предложит торговые сценарии "
         "с конкретными уровнями входа, стопа и целей.\n\n"
-        "📊 Выбери символ и таймфрейм для анализа:",
-        reply_markup=ai_scenarios_kb.get_symbols_keyboard()
+    )
+
+    if cached_pairs:
+        text += "📦 <b>Сохранённые сценарии:</b> (нажми для просмотра)\n\n"
+
+    text += "📊 Выбери символ и таймфрейм для анализа:"
+
+    await message.answer(
+        text,
+        reply_markup=ai_scenarios_kb.get_symbols_keyboard(cached_pairs)
     )
 
 
@@ -425,8 +450,8 @@ async def ai_symbol_selected(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("ai:analyze:"))
-async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings_storage):
-    """Запросить сценарии от Syntra AI"""
+async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings_storage, force_refresh: bool = False):
+    """Запросить сценарии от Syntra AI (с кэшированием)"""
     # Парсинг callback: ai:analyze:BTCUSDT:4h
     parts = callback.data.split(":")
     symbol = parts[2]
@@ -434,12 +459,68 @@ async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings
 
     user_id = callback.from_user.id
     settings = await settings_storage.get_settings(user_id)
+    cache = get_scenarios_cache()
 
     await state.update_data(symbol=symbol, timeframe=timeframe)
     await state.set_state(AIScenarioStates.viewing_scenarios)
 
     # КРИТИЧНО: Ответить на callback СРАЗУ, ДО долгого запроса!
     await callback.answer()
+
+    # === ПРОВЕРКА КЭША ===
+    if not force_refresh:
+        cached = cache.get(user_id, symbol, timeframe)
+        if cached and cached.scenarios:
+            logger.info(f"Using cached scenarios for {symbol}:{timeframe}")
+
+            # Сохранить в state из кэша
+            await state.update_data(
+                scenarios=cached.scenarios,
+                analysis_id=cached.analysis_id,
+                current_price=cached.current_price,
+                market_context=cached.market_context,
+                no_trade=cached.no_trade,
+                key_levels=cached.key_levels,
+            )
+
+            # Конвертируем market_context dict обратно в объект для show_scenarios_list
+            mc = cached.market_context
+            market_context_obj = MarketContext(
+                trend=mc.get("trend", "neutral"),
+                phase=mc.get("phase", ""),
+                sentiment=mc.get("sentiment", "neutral"),
+                volatility=mc.get("volatility", "medium"),
+                bias=mc.get("bias", "neutral"),
+                strength=mc.get("strength", 0),
+                rsi=mc.get("rsi"),
+                funding_rate_pct=mc.get("funding_rate_pct"),
+            )
+
+            # Конвертируем no_trade
+            no_trade_obj = None
+            if cached.no_trade and cached.no_trade.get("should_not_trade"):
+                no_trade_obj = NoTradeSignal(
+                    should_not_trade=cached.no_trade.get("should_not_trade", False),
+                    confidence=cached.no_trade.get("confidence", 0),
+                    category=cached.no_trade.get("category", ""),
+                    reasons=cached.no_trade.get("reasons", []),
+                    wait_for=cached.no_trade.get("wait_for"),
+                )
+
+            # Показать время кэша
+            age_mins = int((datetime.utcnow() - cached.cached_at).total_seconds() / 60)
+
+            await show_scenarios_list(
+                callback.message,
+                cached.scenarios,
+                symbol,
+                timeframe,
+                market_context=market_context_obj,
+                no_trade=no_trade_obj,
+                current_price=cached.current_price,
+                cached_age_mins=age_mins
+            )
+            return
 
     # Показать загрузку
     await callback.message.edit_text(
@@ -478,28 +559,47 @@ async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings
             await state.set_state(AIScenarioStates.choosing_symbol)
             return
 
+        # Подготовить market_context dict для кэша
+        market_context_dict = {
+            "trend": analysis.market_context.trend,
+            "phase": analysis.market_context.phase,
+            "sentiment": analysis.market_context.sentiment,
+            "volatility": analysis.market_context.volatility,
+            "bias": analysis.market_context.bias,
+            "strength": analysis.market_context.strength,
+            "rsi": analysis.market_context.rsi,
+            "funding_rate_pct": analysis.market_context.funding_rate_pct,
+        }
+
+        # Подготовить no_trade dict
+        no_trade_dict = {
+            "should_not_trade": analysis.no_trade.should_not_trade if analysis.no_trade else False,
+            "confidence": analysis.no_trade.confidence if analysis.no_trade else 0,
+            "category": analysis.no_trade.category if analysis.no_trade else "",
+            "reasons": analysis.no_trade.reasons if analysis.no_trade else [],
+            "wait_for": analysis.no_trade.wait_for if analysis.no_trade else None,
+        } if analysis.no_trade else None
+
+        # === СОХРАНИТЬ В КЭШ ===
+        cache.set(
+            user_id=user_id,
+            symbol=symbol,
+            timeframe=timeframe,
+            scenarios=scenarios,
+            analysis_id=analysis.analysis_id,
+            current_price=analysis.current_price,
+            market_context=market_context_dict,
+            no_trade=no_trade_dict,
+            key_levels=analysis.key_levels,
+        )
+
         # Сохранить полный анализ в state
         await state.update_data(
             scenarios=scenarios,
             analysis_id=analysis.analysis_id,
             current_price=analysis.current_price,
-            market_context={
-                "trend": analysis.market_context.trend,
-                "phase": analysis.market_context.phase,
-                "sentiment": analysis.market_context.sentiment,
-                "volatility": analysis.market_context.volatility,
-                "bias": analysis.market_context.bias,
-                "strength": analysis.market_context.strength,
-                "rsi": analysis.market_context.rsi,
-                "funding_rate_pct": analysis.market_context.funding_rate_pct,
-            },
-            no_trade={
-                "should_not_trade": analysis.no_trade.should_not_trade if analysis.no_trade else False,
-                "confidence": analysis.no_trade.confidence if analysis.no_trade else 0,
-                "category": analysis.no_trade.category if analysis.no_trade else "",
-                "reasons": analysis.no_trade.reasons if analysis.no_trade else [],
-                "wait_for": analysis.no_trade.wait_for if analysis.no_trade else None,
-            } if analysis.no_trade else None,
+            market_context=market_context_dict,
+            no_trade=no_trade_dict,
             key_levels=analysis.key_levels,
         )
 
@@ -540,7 +640,8 @@ async def show_scenarios_list(
     timeframe: str,
     market_context: Optional[MarketContext] = None,
     no_trade: Optional[NoTradeSignal] = None,
-    current_price: float = 0.0
+    current_price: float = 0.0,
+    cached_age_mins: Optional[int] = None
 ):
     """Показать список сценариев с market context и no_trade предупреждением"""
 
@@ -548,6 +649,16 @@ async def show_scenarios_list(
     text = f"🤖 <b>AI Scenarios: {symbol} ({timeframe})</b>\n"
     if current_price > 0:
         text += f"💰 Price: ${current_price:,.2f}\n"
+
+    # Показать что данные из кэша
+    if cached_age_mins is not None:
+        if cached_age_mins < 60:
+            text += f"📦 <i>Cached {cached_age_mins}m ago</i>\n"
+        else:
+            hours = cached_age_mins // 60
+            mins = cached_age_mins % 60
+            text += f"📦 <i>Cached {hours}h {mins}m ago</i>\n"
+
     text += "\n"
 
     # === MARKET CONTEXT ===
@@ -584,13 +695,14 @@ async def show_scenarios_list(
 
         text += f"{category_emoji} <b>⚠️ CAUTION: {no_trade.category.upper()}</b> ({no_trade.confidence*100:.0f}%)\n"
 
-        # Показываем первые 2 причины
+        # Показываем первые 2 причины (экранируем HTML)
         for reason in no_trade.reasons[:2]:
-            text += f"   • {reason}\n"
+            text += f"   • {html.escape(str(reason))}\n"
 
         # Wait for
         if no_trade.wait_for:
-            text += f"   <i>Ждать: {', '.join(no_trade.wait_for[:2])}</i>\n"
+            wait_items = [html.escape(str(w)) for w in no_trade.wait_for[:2]]
+            text += f"   <i>Ждать: {', '.join(wait_items)}</i>\n"
 
         text += "\n"
 
@@ -601,7 +713,7 @@ async def show_scenarios_list(
         bias = scenario.get("bias", "neutral")
         bias_emoji = "🟢" if bias == "long" else "🔴" if bias == "short" else "⚪"
 
-        name = scenario.get("name", f"Scenario {i}")
+        name = html.escape(scenario.get("name", f"Scenario {i}"))
         confidence = scenario.get("confidence", 0) * 100
 
         # EV Grade если есть
@@ -683,14 +795,14 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
     """Показать детальную карточку сценария с EV метриками и class stats"""
 
     # Базовая информация
-    name = scenario.get("name", "Unknown Scenario")
+    name = html.escape(scenario.get("name", "Unknown Scenario"))
     bias = scenario.get("bias", "neutral")
     bias_emoji = "🟢" if bias == "long" else "🔴" if bias == "short" else "⚪"
     confidence = scenario.get("confidence", 0) * 100
 
     # Archetype
     archetype = scenario.get("primary_archetype", "")
-    archetype_text = f" [{archetype}]" if archetype else ""
+    archetype_text = f" [{html.escape(str(archetype))}]" if archetype else ""
 
     # Entry Plan (ladder) или обычный Entry
     entry_plan = scenario.get("entry_plan")
@@ -701,11 +813,11 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
         orders = entry_plan.get("orders", [])
         mode = entry_plan.get("mode", "ladder")
 
-        entry_text = f"💹 <b>Entry Orders ({len(orders)}):</b> [{mode}]\n"
+        entry_text = f"💹 <b>Entry Orders ({len(orders)}):</b> [{html.escape(str(mode))}]\n"
         for i, order in enumerate(orders, 1):
             price = order.get("price", 0)
             size_pct = order.get("size_pct", 0)
-            tag = order.get("tag", f"E{i}")
+            tag = html.escape(str(order.get("tag", f"E{i}")))
             entry_text += f"   E{i}: ${price:,.2f} ({size_pct}%) - {tag}\n"
 
         prices = [o.get("price", 0) for o in orders]
@@ -718,7 +830,7 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
         entry_min = entry.get("price_min", 0)
         entry_max = entry.get("price_max", 0)
         entry_avg = (entry_min + entry_max) / 2 if entry_min and entry_max else 0
-        entry_type = entry.get("type", "market_order")
+        entry_type = html.escape(str(entry.get("type", "market_order")))
 
         entry_text = f"💹 <b>Entry Zone:</b> ${entry_min:,.2f} - ${entry_max:,.2f}\n"
         entry_text += f"   Avg: ${entry_avg:,.2f} ({entry_type})"
@@ -726,7 +838,7 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
     # Stop Loss
     stop_loss = scenario.get("stop_loss", {})
     sl_price = stop_loss.get("recommended", 0)
-    sl_reason = stop_loss.get("reason", "")
+    sl_reason = html.escape(str(stop_loss.get("reason", ""))) if stop_loss.get("reason") else ""
 
     # Targets
     targets = scenario.get("targets", [])
@@ -768,7 +880,7 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
         prob_tp1 = outcome_probs.get("tp1", 0)
         prob_tp2 = outcome_probs.get("tp2")
         prob_tp3 = outcome_probs.get("tp3")
-        probs_source = outcome_probs.get("source", "")
+        probs_source = html.escape(str(outcome_probs.get("source", "")))
         sample_size = outcome_probs.get("sample_size")
 
         probs_text = f"📊 <b>Outcome Probs</b> <i>({probs_source}"
@@ -788,7 +900,7 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
     class_text = ""
 
     if class_warning:
-        class_text = f"\n⚠️ <b>Warning:</b> {class_warning}\n"
+        class_text = f"\n⚠️ <b>Warning:</b> {html.escape(str(class_warning))}\n"
     elif class_stats and class_stats.get("sample_size", 0) >= 20:
         winrate = class_stats.get("winrate", 0)
         avg_pnl_r = class_stats.get("avg_pnl_r", 0)
@@ -817,21 +929,21 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
 📊 <b>Leverage:</b> {lev_recommended} (max safe: {lev_max_safe})
 """
 
-    # Факторы
+    # Факторы (экранируем HTML)
     if bullish_factors:
         card += "\n🟢 <b>Bullish:</b>\n"
         for factor in bullish_factors[:2]:
-            card += f"   • {factor}\n"
+            card += f"   • {html.escape(str(factor))}\n"
 
     if bearish_factors:
         card += "\n🔴 <b>Bearish:</b>\n"
         for factor in bearish_factors[:2]:
-            card += f"   • {factor}\n"
+            card += f"   • {html.escape(str(factor))}\n"
 
     if risks:
         card += "\n⚠️ <b>Risks:</b>\n"
         for risk in risks[:2]:
-            card += f"   • {risk}\n"
+            card += f"   • {html.escape(str(risk))}\n"
 
     card += "\n💰 <b>Выбери риск для открытия:</b>"
 
@@ -890,7 +1002,15 @@ async def ai_custom_risk_process(message: Message, state: FSMContext, settings_s
         symbol = data.get("symbol", "BTCUSDT")
 
         settings = await settings_storage.get_settings(user_id)
-        leverage = settings.default_leverage
+
+        # Используем leverage из сценария (если есть), иначе из settings
+        leverage_info = scenario.get("leverage", {})
+        if isinstance(leverage_info, dict):
+            leverage = leverage_info.get("recommended", settings.default_leverage)
+        elif isinstance(leverage_info, (int, float)):
+            leverage = int(leverage_info)
+        else:
+            leverage = settings.default_leverage
 
         # === CONFIDENCE-BASED RISK SCALING ===
         confidence = scenario.get("confidence", 0.5)
@@ -970,8 +1090,14 @@ async def ai_trade_with_risk(callback: CallbackQuery, state: FSMContext, setting
     user_id = callback.from_user.id
     settings = await settings_storage.get_settings(user_id)
 
-    # Используем дефолтное плечо из settings
-    leverage = settings.default_leverage
+    # Используем leverage из сценария (если есть), иначе из settings
+    leverage_info = scenario.get("leverage", {})
+    if isinstance(leverage_info, dict):
+        leverage = leverage_info.get("recommended", settings.default_leverage)
+    elif isinstance(leverage_info, (int, float)):
+        leverage = int(leverage_info)
+    else:
+        leverage = settings.default_leverage
 
     # === CONFIDENCE-BASED RISK SCALING ===
     confidence = scenario.get("confidence", 0.5)
@@ -1771,10 +1897,27 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 @router.callback_query(F.data == "ai:back_to_list")
 async def ai_back_to_list(callback: CallbackQuery, state: FSMContext):
     """Вернуться к списку сценариев (из деталей)"""
+    user_id = callback.from_user.id
     data = await state.get_data()
     scenarios = data.get("scenarios", [])
     symbol = data.get("symbol", "BTCUSDT")
     timeframe = data.get("timeframe", "4h")
+
+    # Если нет сценариев в state - попробовать восстановить из кэша
+    if not scenarios:
+        cache = get_scenarios_cache()
+        cached = cache.get(user_id, symbol, timeframe)
+        if cached and cached.scenarios:
+            scenarios = cached.scenarios
+            # Восстановить в state
+            await state.update_data(
+                scenarios=scenarios,
+                analysis_id=cached.analysis_id,
+                current_price=cached.current_price,
+                market_context=cached.market_context,
+                no_trade=cached.no_trade,
+                key_levels=cached.key_levels,
+            )
 
     if not scenarios:
         # Нет сценариев - вернуть к выбору символа
@@ -1785,9 +1928,47 @@ async def ai_back_to_list(callback: CallbackQuery, state: FSMContext):
             reply_markup=ai_scenarios_kb.get_symbols_keyboard()
         )
     else:
-        # Показать список сценариев
+        # Показать список сценариев с market_context
         await state.set_state(AIScenarioStates.viewing_scenarios)
-        await show_scenarios_list(callback.message, scenarios, symbol, timeframe)
+
+        # Получаем market_context из state
+        mc_dict = data.get("market_context", {})
+        market_context_obj = None
+        if mc_dict:
+            market_context_obj = MarketContext(
+                trend=mc_dict.get("trend", "neutral"),
+                phase=mc_dict.get("phase", ""),
+                sentiment=mc_dict.get("sentiment", "neutral"),
+                volatility=mc_dict.get("volatility", "medium"),
+                bias=mc_dict.get("bias", "neutral"),
+                strength=mc_dict.get("strength", 0),
+                rsi=mc_dict.get("rsi"),
+                funding_rate_pct=mc_dict.get("funding_rate_pct"),
+            )
+
+        # Получаем no_trade
+        no_trade_dict = data.get("no_trade")
+        no_trade_obj = None
+        if no_trade_dict and no_trade_dict.get("should_not_trade"):
+            no_trade_obj = NoTradeSignal(
+                should_not_trade=no_trade_dict.get("should_not_trade", False),
+                confidence=no_trade_dict.get("confidence", 0),
+                category=no_trade_dict.get("category", ""),
+                reasons=no_trade_dict.get("reasons", []),
+                wait_for=no_trade_dict.get("wait_for"),
+            )
+
+        current_price = data.get("current_price", 0)
+
+        await show_scenarios_list(
+            callback.message,
+            scenarios,
+            symbol,
+            timeframe,
+            market_context=market_context_obj,
+            no_trade=no_trade_obj,
+            current_price=current_price
+        )
 
     await callback.answer()
 
@@ -1795,12 +1976,30 @@ async def ai_back_to_list(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "ai:change_symbol")
 async def ai_change_symbol(callback: CallbackQuery, state: FSMContext):
     """Выбрать другой символ (из списка сценариев)"""
+    user_id = callback.from_user.id
+
+    # Получить закэшированные пары
+    cache = get_scenarios_cache()
+    cached_pairs_raw = cache.get_user_cached_pairs(user_id)
+
+    # Конвертировать в формат (symbol, timeframe, age_mins)
+    cached_pairs = []
+    for symbol, timeframe, cached_at in cached_pairs_raw:
+        age_mins = int((datetime.utcnow() - cached_at).total_seconds() / 60)
+        cached_pairs.append((symbol, timeframe, age_mins))
+
+    cached_pairs.sort(key=lambda x: x[2])
+
     await state.set_state(AIScenarioStates.choosing_symbol)
 
+    text = "🤖 <b>AI Trading Scenarios</b>\n\n"
+    if cached_pairs:
+        text += "📦 <b>Сохранённые сценарии:</b>\n\n"
+    text += "📊 Выбери символ и таймфрейм для анализа:"
+
     await callback.message.edit_text(
-        "🤖 <b>AI Trading Scenarios</b>\n\n"
-        "📊 Выбери символ и таймфрейм для анализа:",
-        reply_markup=ai_scenarios_kb.get_symbols_keyboard()
+        text,
+        reply_markup=ai_scenarios_kb.get_symbols_keyboard(cached_pairs)
     )
 
     await callback.answer()
@@ -1961,13 +2160,28 @@ async def ai_edit_sl_cancel(callback: CallbackQuery, state: FSMContext, settings
 
 @router.callback_query(AIScenarioStates.viewing_scenarios, F.data == "ai:refresh")
 async def ai_refresh_scenarios(callback: CallbackQuery, state: FSMContext, settings_storage):
-    """Обновить сценарии"""
+    """Обновить сценарии (инвалидировать кэш и запросить заново)"""
     data = await state.get_data()
     symbol = data.get("symbol", "BTCUSDT")
     timeframe = data.get("timeframe", "4h")
+    user_id = callback.from_user.id
 
-    # Повторно запросить
-    await ai_analyze_market(callback, state, settings_storage)
+    # Инвалидировать кэш
+    cache = get_scenarios_cache()
+    cache.invalidate(user_id, symbol, timeframe)
+    logger.info(f"Cache invalidated for {symbol}:{timeframe}, refreshing...")
+
+    # Сохранить флаг force_refresh в state
+    await state.update_data(force_refresh=True)
+
+    # Эмулируем callback data для ai_analyze_market
+    original_data = callback.data
+    callback.data = f"ai:analyze:{symbol}:{timeframe}"
+
+    try:
+        await ai_analyze_market(callback, state, settings_storage, force_refresh=True)
+    finally:
+        callback.data = original_data
 
 
 @router.callback_query(AIScenarioStates.confirmation, F.data.startswith("ai:scenario:"))

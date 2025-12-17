@@ -8,9 +8,31 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any
 
 
-def get_symbols_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора символа для AI анализа"""
+def get_symbols_keyboard(
+    cached_pairs: list[tuple[str, str, int]] = None
+) -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора символа для AI анализа.
+
+    Args:
+        cached_pairs: Список (symbol, timeframe, age_mins) закэшированных пар
+    """
     builder = InlineKeyboardBuilder()
+    rows = []
+
+    # Показать закэшированные пары если есть
+    if cached_pairs:
+        for symbol, timeframe, age_mins in cached_pairs[:3]:  # Макс 3 пары
+            coin = symbol.replace("USDT", "")
+            if age_mins < 60:
+                age_str = f"{age_mins}m"
+            else:
+                age_str = f"{age_mins // 60}h"
+            builder.button(
+                text=f"📦 {coin} {timeframe} ({age_str})",
+                callback_data=f"ai:analyze:{symbol}:{timeframe}"
+            )
+        rows.append(len(cached_pairs[:3]))
 
     # Основные символы
     builder.button(text="BTC", callback_data="ai:symbol:BTCUSDT")
@@ -18,14 +40,15 @@ def get_symbols_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="SOL", callback_data="ai:symbol:SOLUSDT")
     builder.button(text="BNB", callback_data="ai:symbol:BNBUSDT")
     builder.button(text="HYPE", callback_data="ai:symbol:HYPEUSDT")
+    rows.extend([2, 2, 1])
 
     # Выбор таймфрейма
     builder.button(text="⏰ 1H", callback_data="ai:timeframe:1h")
     builder.button(text="⏰ 4H", callback_data="ai:timeframe:4h")
     builder.button(text="⏰ 1D", callback_data="ai:timeframe:1d")
+    rows.append(3)
 
-    # Layout: 2 символа в ряд, потом таймфреймы
-    builder.adjust(2, 2, 1, 3)
+    builder.adjust(*rows)
 
     return builder.as_markup()
 
