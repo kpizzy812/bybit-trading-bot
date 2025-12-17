@@ -827,18 +827,31 @@ async def ai_scenario_selected(callback: CallbackQuery, state: FSMContext):
         return
 
     scenario = scenarios[scenario_index]
+    symbol = data.get("symbol", "")
+    timeframe = data.get("timeframe", "")
+    current_price = data.get("current_price", 0.0)
 
     await state.update_data(selected_scenario_index=scenario_index)
     await state.set_state(AIScenarioStates.viewing_detail)
 
-    # Показать детали сценария
-    await show_scenario_detail(callback.message, scenario, scenario_index)
+    # Показать детали сценария с графиком
+    await show_scenario_detail(
+        callback.message, scenario, scenario_index,
+        symbol=symbol, timeframe=timeframe, current_price=current_price
+    )
 
     await callback.answer()
 
 
-async def show_scenario_detail(message: Message, scenario: dict, scenario_index: int):
-    """Показать детальную карточку сценария с EV метриками и class stats"""
+async def show_scenario_detail(
+    message: Message,
+    scenario: dict,
+    scenario_index: int,
+    symbol: str = "",
+    timeframe: str = "",
+    current_price: float = 0.0
+):
+    """Показать детальную карточку сценария с графиком и EV метриками"""
 
     # Базовая информация
     name = html.escape(scenario.get("name", "Unknown Scenario"))
@@ -993,10 +1006,69 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
 
     card += "\n💰 <b>Выбери риск для открытия:</b>"
 
-    await message.edit_text(
-        card,
-        reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(scenario_index)
-    )
+    # Лимит caption для фото - 1024 символа
+    CAPTION_LIMIT = 1024
+
+    # Генерируем график если есть данные о символе
+    chart_png = None
+    if symbol and timeframe:
+        try:
+            bybit = BybitClient(testnet=config.BYBIT_TESTNET)
+            klines = await bybit.get_klines(
+                symbol=symbol,
+                interval=timeframe,
+                limit=100
+            )
+            if klines:
+                generator = get_chart_generator()
+                chart_png = generator.generate_scenario_chart(
+                    klines=klines,
+                    scenario=scenario,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    current_price=current_price
+                )
+        except Exception as e:
+            logger.warning(f"Chart generation failed: {e}")
+
+    # Удаляем старое сообщение (текстовое нельзя преобразовать в фото)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    # Отправляем в зависимости от длины текста и наличия графика
+    if chart_png and len(card) <= CAPTION_LIMIT:
+        # Текст короткий - отправляем фото с caption
+        photo = BufferedInputFile(chart_png, filename=f"{symbol}_{timeframe}.png")
+        await message.answer_photo(
+            photo=photo,
+            caption=card,
+            parse_mode="HTML",
+            reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(
+                scenario_index, show_chart_button=False
+            )
+        )
+    elif chart_png:
+        # Текст длинный - отправляем фото отдельно, потом текст с кнопкой
+        photo = BufferedInputFile(chart_png, filename=f"{symbol}_{timeframe}.png")
+        await message.answer_photo(photo=photo)
+        await message.answer(
+            card,
+            parse_mode="HTML",
+            reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(
+                scenario_index, show_chart_button=False
+            )
+        )
+    else:
+        # Нет графика - просто текст с кнопкой графика
+        await message.answer(
+            card,
+            parse_mode="HTML",
+            reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(
+                scenario_index, show_chart_button=True
+            )
+        )
 
 
 @router.callback_query(AIScenarioStates.viewing_detail, F.data.startswith("ai:chart:"))
@@ -1176,11 +1248,17 @@ async def ai_custom_risk_cancel(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     scenarios = data.get("scenarios", [])
     scenario = scenarios[scenario_index]
+    symbol = data.get("symbol", "")
+    timeframe = data.get("timeframe", "")
+    current_price = data.get("current_price", 0.0)
 
     await state.set_state(AIScenarioStates.viewing_detail)
 
-    # Показываем детали сценария
-    await show_scenario_detail(callback.message, scenario, scenario_index)
+    # Показываем детали сценария с графиком
+    await show_scenario_detail(
+        callback.message, scenario, scenario_index,
+        symbol=symbol, timeframe=timeframe, current_price=current_price
+    )
 
     await callback.answer("Отменено")
 
@@ -2301,11 +2379,17 @@ async def ai_change_risk_from_confirmation(callback: CallbackQuery, state: FSMCo
         return
 
     scenario = scenarios[scenario_index]
+    symbol = data.get("symbol", "")
+    timeframe = data.get("timeframe", "")
+    current_price = data.get("current_price", 0.0)
 
     await state.update_data(selected_scenario_index=scenario_index)
     await state.set_state(AIScenarioStates.viewing_detail)
 
-    # Показать детали сценария с выбором риска
-    await show_scenario_detail(callback.message, scenario, scenario_index)
+    # Показать детали сценария с графиком
+    await show_scenario_detail(
+        callback.message, scenario, scenario_index,
+        symbol=symbol, timeframe=timeframe, current_price=current_price
+    )
 
     await callback.answer()

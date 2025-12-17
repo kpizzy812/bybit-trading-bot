@@ -91,20 +91,27 @@ def get_scenarios_keyboard(scenarios: List[Dict[str, Any]]) -> InlineKeyboardMar
     return builder.as_markup()
 
 
-def get_scenario_detail_keyboard(scenario_index: int) -> InlineKeyboardMarkup:
+def get_scenario_detail_keyboard(
+    scenario_index: int,
+    show_chart_button: bool = False
+) -> InlineKeyboardMarkup:
     """
     Клавиатура для детального просмотра сценария
 
     Args:
         scenario_index: Индекс сценария в списке
+        show_chart_button: Показывать ли кнопку графика (если текст длинный)
 
     Returns:
         InlineKeyboardMarkup с действиями
     """
     builder = InlineKeyboardBuilder()
+    rows = []
 
-    # Кнопка графика
-    builder.button(text="📊 График", callback_data=f"ai:chart:{scenario_index}")
+    # Кнопка графика (только если текст длинный и график не прикреплён)
+    if show_chart_button:
+        builder.button(text="📊 График", callback_data=f"ai:chart:{scenario_index}")
+        rows.append(1)
 
     # Выбор риска для quick trade
     builder.button(text="💰 Trade $5", callback_data=f"ai:trade:{scenario_index}:5")
@@ -118,8 +125,9 @@ def get_scenario_detail_keyboard(scenario_index: int) -> InlineKeyboardMarkup:
     # Кнопки управления
     builder.button(text="🔙 К сценариям", callback_data="ai:back_to_list")
 
-    # Layout: график, 2+2 пресета риска, custom, назад
-    builder.adjust(1, 2, 2, 1, 1)
+    # Layout: [график если есть], 2+2 пресета риска, custom, назад
+    rows.extend([2, 2, 1, 1])
+    builder.adjust(*rows)
 
     return builder.as_markup()
 
