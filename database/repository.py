@@ -9,7 +9,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from loguru import logger
 
-from database.models import Scenario, Trade, NoTradeSignal, MarketContext
+from database.models import Scenario, Trade, NoTradeSignal, MarketContext, UserSettingsDB
 from database.engine import AsyncSessionLocal
 import config
 
@@ -196,9 +196,18 @@ class ScenarioRepository:
         timeframe: Optional[str] = None,
         entry_mode: str = "single",
         testnet: bool = False,
+        # === NEW FIELDS ===
+        margin_mode: str = "Isolated",
+        opened_at: Optional[datetime] = None,
+        tp_price: Optional[float] = None,
+        rr_planned: Optional[float] = None,
+        entry_fee_usd: Optional[float] = None,
+        scenario_source: str = "manual",
+        entry_reason: Optional[str] = None,
+        scenario_snapshot: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        Save trade to database with scenario metadata.
+        Save trade to database with full scenario metadata.
         """
         if not config.POSTGRES_ENABLED or AsyncSessionLocal is None:
             return
@@ -225,6 +234,7 @@ class ScenarioRepository:
                 # Extract scenario metadata
                 ev_metrics = scenario_data.get("ev_metrics", {}) if scenario_data else {}
                 class_stats = scenario_data.get("class_stats", {}) if scenario_data else {}
+                outcome_probs = scenario_data.get("outcome_probs", {}) if scenario_data else {}
 
                 trade = Trade(
                     trade_id=trade_id,
@@ -233,20 +243,45 @@ class ScenarioRepository:
                     symbol=symbol,
                     side=side,
                     timeframe=timeframe,
+                    # Entry
                     entry_price=entry_price,
                     qty=qty,
                     leverage=leverage,
+                    margin_mode=margin_mode,
                     margin_usd=margin_usd,
                     entry_mode=entry_mode,
+                    opened_at=opened_at or datetime.utcnow(),
+                    # Risk / Planned
                     stop_price=stop_price,
                     risk_usd=risk_usd,
+                    tp_price=tp_price,
+                    rr_planned=rr_planned,
+                    # Fees
+                    entry_fee_usd=entry_fee_usd,
+                    # Status
                     testnet=testnet,
+                    remaining_qty=qty,
+                    # Scenario source
+                    scenario_source=scenario_source,
+                    entry_reason=entry_reason,
+                    analysis_id=analysis_id,
+                    validation_status=scenario_data.get("validation_status") if scenario_data else None,
                     # Scenario metadata (denormalized)
                     scenario_confidence=scenario_data.get("confidence") if scenario_data else None,
+                    scenario_bias=scenario_data.get("bias") if scenario_data else None,
                     scenario_archetype=scenario_data.get("primary_archetype") if scenario_data else None,
                     scenario_ev_r=ev_metrics.get("ev_r"),
                     scenario_ev_grade=ev_metrics.get("ev_grade"),
+                    scenario_score=ev_metrics.get("scenario_score"),
                     scenario_class_key=class_stats.get("class_key"),
+                    scenario_class_winrate=class_stats.get("winrate"),
+                    scenario_class_warning=scenario_data.get("class_warning") if scenario_data else None,
+                    # Outcome probs
+                    prob_sl=outcome_probs.get("sl"),
+                    prob_tp1=outcome_probs.get("tp1"),
+                    probs_source=outcome_probs.get("source"),
+                    # Full snapshot
+                    scenario_snapshot=scenario_snapshot,
                 )
                 session.add(trade)
                 await session.commit()
@@ -268,9 +303,21 @@ class ScenarioRepository:
         total_fees_usd: Optional[float] = None,
         mae_r: Optional[float] = None,
         mfe_r: Optional[float] = None,
+        # === NEW FIELDS ===
+        avg_exit_price: Optional[float] = None,
+        fills: Optional[List[Dict[str, Any]]] = None,
+        closed_qty: Optional[float] = None,
+        remaining_qty: Optional[float] = None,
+        exit_fees_usd: Optional[float] = None,
+        funding_usd: Optional[float] = None,
+        min_price_seen: Optional[float] = None,
+        max_price_seen: Optional[float] = None,
+        mae_usd: Optional[float] = None,
+        mfe_usd: Optional[float] = None,
+        status: str = "closed",
     ) -> None:
         """
-        Update trade with exit results.
+        Update trade with exit results and full metrics.
         """
         if not config.POSTGRES_ENABLED or AsyncSessionLocal is None:
             return
@@ -283,17 +330,41 @@ class ScenarioRepository:
                 trade = result.scalar_one_or_none()
 
                 if trade:
+                    # Exit data
                     trade.exit_price = exit_price
+                    trade.avg_exit_price = avg_exit_price or exit_price
                     trade.pnl_usd = pnl_usd
                     trade.pnl_percent = pnl_percent
                     trade.roe_percent = roe_percent
                     trade.rr_actual = rr_actual
                     trade.outcome = outcome
                     trade.exit_reason = exit_reason
+                    # Fills
+                    if fills is not None:
+                        trade.fills = fills
+                    if closed_qty is not None:
+                        trade.closed_qty = closed_qty
+                    if remaining_qty is not None:
+                        trade.remaining_qty = remaining_qty
+                    # Fees
                     trade.total_fees_usd = total_fees_usd
+                    if exit_fees_usd is not None:
+                        trade.exit_fees_usd = exit_fees_usd
+                    if funding_usd is not None:
+                        trade.funding_usd = funding_usd
+                    # MAE/MFE
+                    if min_price_seen is not None:
+                        trade.min_price_seen = min_price_seen
+                    if max_price_seen is not None:
+                        trade.max_price_seen = max_price_seen
+                    if mae_usd is not None:
+                        trade.mae_usd = mae_usd
                     trade.mae_r = mae_r
+                    if mfe_usd is not None:
+                        trade.mfe_usd = mfe_usd
                     trade.mfe_r = mfe_r
-                    trade.status = "closed"
+                    # Status
+                    trade.status = status
                     trade.closed_at = datetime.utcnow()
                     await session.commit()
                     logger.debug(f"Updated trade {trade_id} result in DB")
@@ -426,3 +497,160 @@ class ScenarioRepository:
 
 
 from datetime import timedelta
+
+
+class UserSettingsRepository:
+    """
+    Repository for user settings persistence in PostgreSQL.
+    """
+
+    @staticmethod
+    async def get_settings(user_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get user settings from database.
+        Returns dict or None if not found.
+        """
+        if not config.POSTGRES_ENABLED or AsyncSessionLocal is None:
+            return None
+
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(UserSettingsDB).where(UserSettingsDB.user_id == user_id)
+                )
+                settings = result.scalar_one_or_none()
+
+                if settings:
+                    return {
+                        "user_id": settings.user_id,
+                        "trading_capital_mode": settings.trading_capital_mode,
+                        "trading_capital_usd": settings.trading_capital_usd,
+                        "default_risk_usd": settings.default_risk_usd,
+                        "default_leverage": settings.default_leverage,
+                        "default_margin_mode": settings.default_margin_mode,
+                        "default_tp_mode": settings.default_tp_mode,
+                        "default_tp_rr": settings.default_tp_rr,
+                        "shorts_enabled": settings.shorts_enabled,
+                        "confirm_always": settings.confirm_always,
+                        "max_risk_per_trade": settings.max_risk_per_trade,
+                        "max_margin_per_trade": settings.max_margin_per_trade,
+                        "max_notional_per_trade": settings.max_notional_per_trade,
+                        "testnet_mode": settings.testnet_mode,
+                        "auto_breakeven_enabled": settings.auto_breakeven_enabled,
+                        "max_active_positions": settings.max_active_positions,
+                        "confidence_risk_scaling": settings.confidence_risk_scaling,
+                    }
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to get user settings from DB: {e}")
+            return None
+
+    @staticmethod
+    async def save_settings(
+        user_id: int,
+        trading_capital_mode: str = "manual",
+        trading_capital_usd: Optional[float] = None,
+        default_risk_usd: float = 5.0,
+        default_leverage: int = 10,
+        default_margin_mode: str = "Isolated",
+        default_tp_mode: str = "rr",
+        default_tp_rr: float = 2.0,
+        shorts_enabled: bool = True,
+        confirm_always: bool = True,
+        max_risk_per_trade: float = 50.0,
+        max_margin_per_trade: float = 500.0,
+        max_notional_per_trade: float = 10000.0,
+        testnet_mode: bool = False,
+        auto_breakeven_enabled: bool = True,
+        max_active_positions: int = 5,
+        confidence_risk_scaling: bool = True,
+    ) -> bool:
+        """
+        Save or update user settings in database.
+        Returns True on success.
+        """
+        if not config.POSTGRES_ENABLED or AsyncSessionLocal is None:
+            return False
+
+        try:
+            async with AsyncSessionLocal() as session:
+                # Check if exists
+                result = await session.execute(
+                    select(UserSettingsDB).where(UserSettingsDB.user_id == user_id)
+                )
+                settings = result.scalar_one_or_none()
+
+                if settings:
+                    # Update existing
+                    settings.trading_capital_mode = trading_capital_mode
+                    settings.trading_capital_usd = trading_capital_usd
+                    settings.default_risk_usd = default_risk_usd
+                    settings.default_leverage = default_leverage
+                    settings.default_margin_mode = default_margin_mode
+                    settings.default_tp_mode = default_tp_mode
+                    settings.default_tp_rr = default_tp_rr
+                    settings.shorts_enabled = shorts_enabled
+                    settings.confirm_always = confirm_always
+                    settings.max_risk_per_trade = max_risk_per_trade
+                    settings.max_margin_per_trade = max_margin_per_trade
+                    settings.max_notional_per_trade = max_notional_per_trade
+                    settings.testnet_mode = testnet_mode
+                    settings.auto_breakeven_enabled = auto_breakeven_enabled
+                    settings.max_active_positions = max_active_positions
+                    settings.confidence_risk_scaling = confidence_risk_scaling
+                else:
+                    # Create new
+                    settings = UserSettingsDB(
+                        user_id=user_id,
+                        trading_capital_mode=trading_capital_mode,
+                        trading_capital_usd=trading_capital_usd,
+                        default_risk_usd=default_risk_usd,
+                        default_leverage=default_leverage,
+                        default_margin_mode=default_margin_mode,
+                        default_tp_mode=default_tp_mode,
+                        default_tp_rr=default_tp_rr,
+                        shorts_enabled=shorts_enabled,
+                        confirm_always=confirm_always,
+                        max_risk_per_trade=max_risk_per_trade,
+                        max_margin_per_trade=max_margin_per_trade,
+                        max_notional_per_trade=max_notional_per_trade,
+                        testnet_mode=testnet_mode,
+                        auto_breakeven_enabled=auto_breakeven_enabled,
+                        max_active_positions=max_active_positions,
+                        confidence_risk_scaling=confidence_risk_scaling,
+                    )
+                    session.add(settings)
+
+                await session.commit()
+                logger.debug(f"Saved user {user_id} settings to DB")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to save user settings to DB: {e}")
+            return False
+
+    @staticmethod
+    async def save_settings_dict(user_id: int, data: Dict[str, Any]) -> bool:
+        """
+        Save settings from dict (convenience method).
+        """
+        return await UserSettingsRepository.save_settings(
+            user_id=user_id,
+            trading_capital_mode=data.get("trading_capital_mode", "manual"),
+            trading_capital_usd=data.get("trading_capital_usd"),
+            default_risk_usd=data.get("default_risk_usd", 5.0),
+            default_leverage=data.get("default_leverage", 10),
+            default_margin_mode=data.get("default_margin_mode", "Isolated"),
+            default_tp_mode=data.get("default_tp_mode", "rr"),
+            default_tp_rr=data.get("default_tp_rr", 2.0),
+            shorts_enabled=data.get("shorts_enabled", True),
+            confirm_always=data.get("confirm_always", True),
+            max_risk_per_trade=data.get("max_risk_per_trade", 50.0),
+            max_margin_per_trade=data.get("max_margin_per_trade", 500.0),
+            max_notional_per_trade=data.get("max_notional_per_trade", 10000.0),
+            testnet_mode=data.get("testnet_mode", False),
+            auto_breakeven_enabled=data.get("auto_breakeven_enabled", True),
+            max_active_positions=data.get("max_active_positions", 5),
+            confidence_risk_scaling=data.get("confidence_risk_scaling", True),
+        )

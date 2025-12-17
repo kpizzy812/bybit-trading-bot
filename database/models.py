@@ -212,7 +212,7 @@ class Scenario(Base):
 class Trade(Base):
     """
     Trade record linked to scenario.
-    Extends Redis storage with relational queries.
+    Full persistence of TradeRecord from Redis.
     """
     __tablename__ = "trades"
 
@@ -221,6 +221,7 @@ class Trade(Base):
     scenario_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("scenarios.id"), nullable=True)
     user_id: Mapped[int] = mapped_column(Integer, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    opened_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # Actual open time
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     # Basic
@@ -232,15 +233,19 @@ class Trade(Base):
     entry_price: Mapped[float] = mapped_column(Float)
     qty: Mapped[float] = mapped_column(Float)
     leverage: Mapped[int] = mapped_column(Integer)
+    margin_mode: Mapped[str] = mapped_column(String(20), default="Isolated")  # Isolated, Cross
     margin_usd: Mapped[float] = mapped_column(Float)
     entry_mode: Mapped[str] = mapped_column(String(20), default="single")  # ladder, single, dca
 
-    # Risk
+    # Risk / Planned
     stop_price: Mapped[float] = mapped_column(Float)
     risk_usd: Mapped[float] = mapped_column(Float)
+    tp_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rr_planned: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Result
     exit_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    avg_exit_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # For partial closes
     pnl_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     pnl_percent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     roe_percent: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -248,23 +253,53 @@ class Trade(Base):
     outcome: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # win, loss, breakeven
     exit_reason: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
 
-    # Fees
+    # Fills (partial closes) - JSON array
+    fills: Mapped[Optional[List[dict]]] = mapped_column(JSON, nullable=True)
+    closed_qty: Mapped[float] = mapped_column(Float, default=0.0)
+    remaining_qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Fees (detailed)
+    entry_fee_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    exit_fees_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    funding_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     total_fees_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
-    # MAE/MFE
+    # MAE/MFE (via price tracking)
+    min_price_seen: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_price_seen: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    mae_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     mae_r: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    mfe_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     mfe_r: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
     # Status
     status: Mapped[str] = mapped_column(String(20), default="open")  # open, partial, closed
     testnet: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # === SCENARIO SOURCE ===
+    scenario_source: Mapped[str] = mapped_column(String(20), default="manual")  # syntra, manual, signal
+    entry_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    validation_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    analysis_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # Denormalized for queries
+
     # === SCENARIO METADATA (denormalized for fast queries) ===
     scenario_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    scenario_bias: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # long, short
     scenario_archetype: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     scenario_ev_r: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     scenario_ev_grade: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)
+    scenario_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     scenario_class_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    scenario_class_winrate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    scenario_class_warning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # === OUTCOME PROBS (denormalized) ===
+    prob_sl: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    prob_tp1: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    probs_source: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+
+    # === FULL SCENARIO SNAPSHOT (JSON backup) ===
+    scenario_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     # Relationship
     scenario: Mapped[Optional["Scenario"]] = relationship(back_populates="trades")
@@ -273,4 +308,45 @@ class Trade(Base):
         Index('ix_trades_user_created', 'user_id', 'created_at'),
         Index('ix_trades_symbol_outcome', 'symbol', 'outcome'),
         Index('ix_trades_archetype_outcome', 'scenario_archetype', 'outcome'),
+        Index('ix_trades_analysis_id', 'analysis_id'),
     )
+
+
+class UserSettingsDB(Base):
+    """
+    User settings persisted in PostgreSQL.
+    Redis serves as cache, PG as source of truth.
+    """
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)  # Telegram user ID
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Trading Capital Settings
+    trading_capital_mode: Mapped[str] = mapped_column(String(20), default="manual")  # manual, auto
+    trading_capital_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Trading defaults
+    default_risk_usd: Mapped[float] = mapped_column(Float, default=5.0)
+    default_leverage: Mapped[int] = mapped_column(Integer, default=10)
+    default_margin_mode: Mapped[str] = mapped_column(String(20), default="Isolated")  # Isolated, Cross
+    default_tp_mode: Mapped[str] = mapped_column(String(20), default="rr")  # single, ladder, rr
+    default_tp_rr: Mapped[float] = mapped_column(Float, default=2.0)
+
+    # Feature toggles
+    shorts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    confirm_always: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Safety limits
+    max_risk_per_trade: Mapped[float] = mapped_column(Float, default=50.0)
+    max_margin_per_trade: Mapped[float] = mapped_column(Float, default=500.0)
+    max_notional_per_trade: Mapped[float] = mapped_column(Float, default=10000.0)
+
+    # Mode
+    testnet_mode: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Risk Management
+    auto_breakeven_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_active_positions: Mapped[int] = mapped_column(Integer, default=5)
+    confidence_risk_scaling: Mapped[bool] = mapped_column(Boolean, default=True)

@@ -7,6 +7,22 @@ import config
 
 logger = logging.getLogger(__name__)
 
+# Lazy import to avoid circular dependencies
+_user_settings_repo = None
+
+
+def _get_user_settings_repo():
+    """Lazy load UserSettingsRepository to avoid circular imports"""
+    global _user_settings_repo
+    if _user_settings_repo is None:
+        try:
+            from database.repository import UserSettingsRepository
+            _user_settings_repo = UserSettingsRepository
+        except ImportError:
+            logger.warning("UserSettingsRepository not available - PG sync disabled")
+            _user_settings_repo = False
+    return _user_settings_repo if _user_settings_repo else None
+
 
 @dataclass
 class UserSettings:
@@ -96,9 +112,10 @@ class UserSettingsStorage:
 
     async def get_settings(self, user_id: int) -> UserSettings:
         """
-        Получить настройки пользователя
-        Если не существуют, создаёт дефолтные
+        Получить настройки пользователя.
+        Приоритет: Redis (кэш) -> PostgreSQL -> in-memory/defaults
         """
+        # 1. Try Redis cache first
         if self.use_redis and self.redis:
             try:
                 key = self._settings_key(user_id)
@@ -111,29 +128,60 @@ class UserSettingsStorage:
             except Exception as e:
                 logger.error(f"Error getting settings from Redis: {e}")
 
-        # Fallback to in-memory
+        # 2. Try PostgreSQL (source of truth)
+        repo = _get_user_settings_repo()
+        if repo and config.POSTGRES_ENABLED:
+            try:
+                pg_data = await repo.get_settings(user_id)
+                if pg_data:
+                    settings = UserSettings.from_dict(pg_data)
+                    # Populate Redis cache
+                    if self.use_redis and self.redis:
+                        try:
+                            key = self._settings_key(user_id)
+                            await self.redis.set(key, json.dumps(settings.to_dict()))
+                            logger.debug(f"Populated Redis cache from PG for user {user_id}")
+                        except Exception as e:
+                            logger.warning(f"Failed to populate Redis cache: {e}")
+                    return settings
+            except Exception as e:
+                logger.error(f"Error getting settings from PostgreSQL: {e}")
+
+        # 3. Fallback to in-memory or create defaults
         if user_id not in self.in_memory_storage:
             self.in_memory_storage[user_id] = UserSettings(user_id=user_id)
 
         return self.in_memory_storage[user_id]
 
     async def save_settings(self, settings: UserSettings):
-        """Сохранить настройки пользователя"""
+        """
+        Сохранить настройки пользователя.
+        Сохраняет в Redis (кэш) и PostgreSQL (persistent).
+        """
         user_id = settings.user_id
+        settings_dict = settings.to_dict()
 
+        # 1. Save to Redis cache
         if self.use_redis and self.redis:
             try:
                 key = self._settings_key(user_id)
-                data = json.dumps(settings.to_dict())
+                data = json.dumps(settings_dict)
                 await self.redis.set(key, data)
                 logger.debug(f"Settings saved to Redis for user {user_id}")
-                return
             except Exception as e:
                 logger.error(f"Error saving settings to Redis: {e}")
 
-        # Fallback to in-memory
+        # 2. Save to PostgreSQL (source of truth)
+        repo = _get_user_settings_repo()
+        if repo and config.POSTGRES_ENABLED:
+            try:
+                await repo.save_settings_dict(user_id, settings_dict)
+                logger.debug(f"Settings saved to PostgreSQL for user {user_id}")
+            except Exception as e:
+                logger.error(f"Error saving settings to PostgreSQL: {e}")
+
+        # 3. Update in-memory cache
         self.in_memory_storage[user_id] = settings
-        logger.debug(f"Settings saved to memory for user {user_id}")
 
     async def update_setting(self, user_id: int, key: str, value: Any):
         """Обновить одну настройку"""
