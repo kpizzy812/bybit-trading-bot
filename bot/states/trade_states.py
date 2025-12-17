@@ -3,6 +3,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 class SettingsStates(StatesGroup):
     """FSM States для настроек с кастомным вводом"""
+    entering_default_risk = State()
     entering_max_risk = State()
     entering_max_margin = State()
 

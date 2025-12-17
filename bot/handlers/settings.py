@@ -119,6 +119,58 @@ async def set_default_risk_value(callback: CallbackQuery, settings_storage):
     await show_settings_menu(callback, settings_storage)
 
 
+@router.callback_query(F.data == "set_default_risk_custom")
+async def set_default_risk_custom_start(callback: CallbackQuery, state: FSMContext):
+    """Начать ввод кастомного значения дефолтного риска"""
+    await callback.answer()
+    await state.set_state(SettingsStates.entering_default_risk)
+
+    await callback.message.edit_text(
+        "✏️ <b>Кастомный дефолтный риск</b>\n\n"
+        "Введи значение в USD (от 1 до 500):\n\n"
+        "Например: <code>25</code> или <code>40</code>"
+    )
+
+
+@router.message(SettingsStates.entering_default_risk)
+async def set_default_risk_custom_process(message: Message, state: FSMContext, settings_storage):
+    """Обработать введённое значение дефолтного риска"""
+    user_id = message.from_user.id
+
+    try:
+        # Парсим значение
+        text = message.text.strip().replace(",", ".").replace("$", "")
+        new_risk = float(text)
+
+        # Валидация
+        if new_risk < 1:
+            await message.answer("⚠️ Минимальное значение: $1")
+            return
+
+        if new_risk > 500:
+            await message.answer("⚠️ Максимальное значение: $500")
+            return
+
+        # Сохраняем
+        await settings_storage.update_setting(user_id, 'default_risk_usd', new_risk)
+
+        await state.clear()
+
+        await message.answer(
+            f"✅ Дефолтный риск установлен: <b>${new_risk:.0f}</b>\n\n"
+            f"Вернись в настройки через меню.",
+            reply_markup=None
+        )
+
+        logger.info(f"User {user_id} set custom default_risk_usd: ${new_risk}")
+
+    except ValueError:
+        await message.answer(
+            "⚠️ Неверный формат!\n\n"
+            "Введи число, например: <code>40</code>"
+        )
+
+
 # ============================================================
 # CALLBACK: Default Leverage
 # ============================================================

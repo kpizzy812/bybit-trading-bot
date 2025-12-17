@@ -49,8 +49,8 @@ def get_default_risk_kb(current_risk: float) -> InlineKeyboardMarkup:
     """
     builder = InlineKeyboardBuilder()
 
-    # Пресеты риска
-    risk_presets = [5, 10, 15, 20]
+    # Расширенные пресеты риска
+    risk_presets = [5, 10, 20, 30, 40, 50]
 
     for risk in risk_presets:
         # Отметка текущего выбора
@@ -63,8 +63,13 @@ def get_default_risk_kb(current_risk: float) -> InlineKeyboardMarkup:
             callback_data=f"set_risk:{risk}"
         )
 
-    # По 2 кнопки в строку
-    builder.adjust(2)
+    # По 3 кнопки в строку
+    builder.adjust(3)
+
+    # Custom ввод
+    builder.row(
+        InlineKeyboardButton(text="✏️ Ввести своё значение", callback_data="set_default_risk_custom")
+    )
 
     # Назад
     builder.row(
