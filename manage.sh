@@ -11,7 +11,7 @@ SSH_HOST="kpeezy"
 REMOTE_DIR="/root/futures-bot"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 SERVICE_NAME="futures-bot"
-PYTHON_VERSION="python3.11"
+PYTHON_VERSION="python3"
 
 # Цвета
 RED='\033[0;31m'
@@ -67,16 +67,13 @@ do_sync() {
 
 do_setup_venv() {
     echo -e "${BLUE}🐍 Настройка виртуального окружения...${NC}"
-    ssh "$SSH_HOST" << EOF
-        cd $REMOTE_DIR
-        if [ ! -d "venv" ]; then
-            echo "Создание venv..."
-            $PYTHON_VERSION -m venv venv
-        fi
-        source venv/bin/activate
-        pip install --upgrade pip
-        pip install -r requirements.txt
-EOF
+    ssh "$SSH_HOST" "cd $REMOTE_DIR && \
+        if [ ! -d 'venv' ]; then \
+            echo 'Создание venv...' && \
+            $PYTHON_VERSION -m venv venv; \
+        fi && \
+        ./venv/bin/pip install --upgrade pip && \
+        ./venv/bin/pip install -r requirements.txt"
     echo -e "${GREEN}✅ Зависимости установлены${NC}"
 }
 
