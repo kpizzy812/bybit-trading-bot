@@ -84,3 +84,64 @@ class MarketDataMixin:
         except Exception as e:
             logger.error(f"Error getting instrument info for {symbol}: {e}")
             raise BybitError(f"Failed to get instrument info: {str(e)}")
+
+    async def get_klines(
+        self,
+        symbol: str,
+        interval: str,
+        limit: int = 100
+    ) -> list[dict]:
+        """
+        Получить OHLC данные (свечи) для символа.
+
+        Args:
+            symbol: Торговая пара (BTCUSDT)
+            interval: Интервал (1h, 4h, 1d)
+            limit: Количество свечей (макс 1000)
+
+        Returns:
+            List[dict]: Список свечей с полями:
+                - timestamp: Unix timestamp в мс
+                - open, high, low, close: Цены
+                - volume: Объём
+        """
+        try:
+            # Маппинг timeframe -> pybit interval
+            interval_map = {
+                "1m": "1",
+                "5m": "5",
+                "15m": "15",
+                "1h": "60",
+                "4h": "240",
+                "1d": "D",
+            }
+            pybit_interval = interval_map.get(interval, interval)
+
+            response = self.client.get_kline(
+                category=config.BYBIT_CATEGORY,
+                symbol=symbol,
+                interval=pybit_interval,
+                limit=limit
+            )
+            result = self._handle_response(response)
+
+            klines = []
+            for item in result.get('list', []):
+                klines.append({
+                    'timestamp': int(item[0]),
+                    'open': float(item[1]),
+                    'high': float(item[2]),
+                    'low': float(item[3]),
+                    'close': float(item[4]),
+                    'volume': float(item[5]),
+                })
+
+            # Сортировка по времени (старые первыми)
+            klines.sort(key=lambda x: x['timestamp'])
+            return klines
+
+        except BybitError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting klines for {symbol}: {e}")
+            raise BybitError(f"Failed to get klines: {str(e)}")

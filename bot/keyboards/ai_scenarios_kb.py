@@ -103,6 +103,9 @@ def get_scenario_detail_keyboard(scenario_index: int) -> InlineKeyboardMarkup:
     """
     builder = InlineKeyboardBuilder()
 
+    # Кнопка графика
+    builder.button(text="📊 График", callback_data=f"ai:chart:{scenario_index}")
+
     # Выбор риска для quick trade
     builder.button(text="💰 Trade $5", callback_data=f"ai:trade:{scenario_index}:5")
     builder.button(text="💰 Trade $10", callback_data=f"ai:trade:{scenario_index}:10")
@@ -115,8 +118,8 @@ def get_scenario_detail_keyboard(scenario_index: int) -> InlineKeyboardMarkup:
     # Кнопки управления
     builder.button(text="🔙 К сценариям", callback_data="ai:back_to_list")
 
-    # Layout: 2 пресета риска в ряд, custom, назад
-    builder.adjust(2, 2, 1, 1)
+    # Layout: график, 2+2 пресета риска, custom, назад
+    builder.adjust(1, 2, 2, 1, 1)
 
     return builder.as_markup()
 

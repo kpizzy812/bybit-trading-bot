@@ -6,3 +6,5 @@ loguru
 aiohttp
 sqlalchemy[asyncio]
 asyncpg
+mplfinance
+pandas

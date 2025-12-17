@@ -15,7 +15,7 @@ import math
 import uuid
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Command
 from loguru import logger
@@ -38,6 +38,7 @@ from services.risk_calculator import RiskCalculator
 from services.trade_logger import TradeRecord
 from services.entry_plan import EntryPlan, EntryOrder
 from services.scenarios_cache import get_scenarios_cache
+from services.charts import get_chart_generator
 from utils.validators import round_qty, round_price
 
 router = Router()
@@ -996,6 +997,77 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
         card,
         reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(scenario_index)
     )
+
+
+@router.callback_query(AIScenarioStates.viewing_detail, F.data.startswith("ai:chart:"))
+async def ai_show_chart(callback: CallbackQuery, state: FSMContext):
+    """Сгенерировать и показать график сценария со стопами и тейками"""
+    scenario_index = int(callback.data.split(":")[2])
+
+    data = await state.get_data()
+    scenarios = data.get("scenarios", [])
+    symbol = data.get("symbol", "BTCUSDT")
+    timeframe = data.get("timeframe", "4h")
+    current_price = data.get("current_price", 0.0)
+
+    if scenario_index >= len(scenarios):
+        await callback.answer("Сценарий не найден", show_alert=True)
+        return
+
+    scenario = scenarios[scenario_index]
+
+    await callback.answer("Генерирую график...")
+
+    try:
+        # Получаем klines от Bybit
+        bybit = BybitClient(testnet=config.BYBIT_TESTNET)
+        klines = await bybit.get_klines(
+            symbol=symbol,
+            interval=timeframe,
+            limit=100
+        )
+
+        if not klines:
+            await callback.message.answer("Не удалось получить данные свечей")
+            return
+
+        # Генерируем график
+        generator = get_chart_generator()
+        chart_png = generator.generate_scenario_chart(
+            klines=klines,
+            scenario=scenario,
+            symbol=symbol,
+            timeframe=timeframe,
+            current_price=current_price
+        )
+
+        # Отправляем как фото
+        photo = BufferedInputFile(chart_png, filename=f"{symbol}_{timeframe}_chart.png")
+
+        bias = scenario.get("bias", "neutral")
+        bias_emoji = "🟢 LONG" if bias == "long" else "🔴 SHORT"
+        name = scenario.get("name", "Scenario")
+
+        caption = (
+            f"📊 <b>{symbol} {timeframe.upper()}</b>\n"
+            f"{bias_emoji} - {name}\n\n"
+            f"🟢 Entry Zone\n"
+            f"🔴 Stop Loss\n"
+            f"🔵 Take Profit\n"
+            f"🟠 Current Price"
+        )
+
+        await callback.message.answer_photo(
+            photo=photo,
+            caption=caption,
+            parse_mode="HTML"
+        )
+
+        logger.info(f"Chart generated for {symbol} {timeframe}")
+
+    except Exception as e:
+        logger.error(f"Chart generation error: {e}", exc_info=True)
+        await callback.message.answer(f"Ошибка генерации графика: {e}")
 
 
 @router.callback_query(AIScenarioStates.viewing_detail, F.data.startswith("ai:custom_risk:"))
