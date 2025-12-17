@@ -19,9 +19,10 @@ from database.models import (
     Scenario,
     Trade,
     NoTradeSignal,
-    MarketContext
+    MarketContext,
+    UserSettingsDB,
 )
-from database.repository import ScenarioRepository
+from database.repository import ScenarioRepository, UserSettingsRepository
 
 __all__ = [
     # Engine
@@ -35,6 +36,8 @@ __all__ = [
     'Trade',
     'NoTradeSignal',
     'MarketContext',
+    'UserSettingsDB',
     # Repository
     'ScenarioRepository',
+    'UserSettingsRepository',
 ]
