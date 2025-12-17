@@ -27,7 +27,8 @@ def get_settings_menu_kb() -> InlineKeyboardMarkup:
     )
 
     builder.row(
-        InlineKeyboardButton(text="🛡 Safety Limits", callback_data="set_safety_limits")
+        InlineKeyboardButton(text="🛡 Safety Limits", callback_data="set_safety_limits"),
+        InlineKeyboardButton(text="📈 Real EV", callback_data="show_ev_stats")
     )
 
     builder.row(
