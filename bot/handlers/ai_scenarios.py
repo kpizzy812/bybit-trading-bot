@@ -43,6 +43,43 @@ from utils.validators import round_qty, round_price
 router = Router()
 
 
+def _parse_leverage(leverage_info, default: int = 5) -> int:
+    """
+    Парсит leverage из разных форматов.
+
+    Args:
+        leverage_info: Может быть:
+            - dict: {"recommended": 3, "max_safe": 10}
+            - int/float: 3
+            - str: "3x" или "3"
+        default: Значение по умолчанию
+
+    Returns:
+        int: Значение leverage
+    """
+    if leverage_info is None:
+        return default
+
+    if isinstance(leverage_info, dict):
+        raw = leverage_info.get("recommended", default)
+    else:
+        raw = leverage_info
+
+    # Парсим значение
+    if isinstance(raw, (int, float)):
+        return int(raw)
+
+    if isinstance(raw, str):
+        # Убираем "x" если есть: "3x" -> "3"
+        cleaned = raw.lower().replace("x", "").strip()
+        try:
+            return int(float(cleaned))
+        except (ValueError, TypeError):
+            return default
+
+    return default
+
+
 def calculate_confidence_adjusted_risk(
     base_risk: float,
     confidence: float,
@@ -1004,13 +1041,7 @@ async def ai_custom_risk_process(message: Message, state: FSMContext, settings_s
         settings = await settings_storage.get_settings(user_id)
 
         # Используем leverage из сценария (если есть), иначе из settings
-        leverage_info = scenario.get("leverage", {})
-        if isinstance(leverage_info, dict):
-            leverage = leverage_info.get("recommended", settings.default_leverage)
-        elif isinstance(leverage_info, (int, float)):
-            leverage = int(leverage_info)
-        else:
-            leverage = settings.default_leverage
+        leverage = _parse_leverage(scenario.get("leverage"), settings.default_leverage)
 
         # === CONFIDENCE-BASED RISK SCALING ===
         confidence = scenario.get("confidence", 0.5)
@@ -1091,13 +1122,7 @@ async def ai_trade_with_risk(callback: CallbackQuery, state: FSMContext, setting
     settings = await settings_storage.get_settings(user_id)
 
     # Используем leverage из сценария (если есть), иначе из settings
-    leverage_info = scenario.get("leverage", {})
-    if isinstance(leverage_info, dict):
-        leverage = leverage_info.get("recommended", settings.default_leverage)
-    elif isinstance(leverage_info, (int, float)):
-        leverage = int(leverage_info)
-    else:
-        leverage = settings.default_leverage
+    leverage = _parse_leverage(scenario.get("leverage"), settings.default_leverage)
 
     # === CONFIDENCE-BASED RISK SCALING ===
     confidence = scenario.get("confidence", 0.5)
