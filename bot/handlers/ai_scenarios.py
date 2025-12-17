@@ -487,12 +487,20 @@ async def ai_symbol_selected(callback: CallbackQuery, state: FSMContext):
 
 
 @router.callback_query(F.data.startswith("ai:analyze:"))
-async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings_storage, force_refresh: bool = False):
+async def ai_analyze_market(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings_storage,
+    force_refresh: bool = False,
+    symbol: str = None,
+    timeframe: str = None
+):
     """Запросить сценарии от Syntra AI (с кэшированием)"""
-    # Парсинг callback: ai:analyze:BTCUSDT:4h
-    parts = callback.data.split(":")
-    symbol = parts[2]
-    timeframe = parts[3]
+    # Парсинг callback: ai:analyze:BTCUSDT:4h (если symbol/timeframe не переданы явно)
+    if symbol is None or timeframe is None:
+        parts = callback.data.split(":")
+        symbol = parts[2]
+        timeframe = parts[3]
 
     user_id = callback.from_user.id
     settings = await settings_storage.get_settings(user_id)
@@ -2199,14 +2207,13 @@ async def ai_refresh_scenarios(callback: CallbackQuery, state: FSMContext, setti
     # Сохранить флаг force_refresh в state
     await state.update_data(force_refresh=True)
 
-    # Эмулируем callback data для ai_analyze_market
-    original_data = callback.data
-    callback.data = f"ai:analyze:{symbol}:{timeframe}"
-
-    try:
-        await ai_analyze_market(callback, state, settings_storage, force_refresh=True)
-    finally:
-        callback.data = original_data
+    # Вызываем ai_analyze_market с явными параметрами symbol и timeframe
+    await ai_analyze_market(
+        callback, state, settings_storage,
+        force_refresh=True,
+        symbol=symbol,
+        timeframe=timeframe
+    )
 
 
 @router.callback_query(AIScenarioStates.confirmation, F.data.startswith("ai:scenario:"))
