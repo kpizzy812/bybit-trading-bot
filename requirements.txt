@@ -3,3 +3,6 @@ pybit
 redis
 python-dotenv
 loguru
+aiohttp
+sqlalchemy[asyncio]
+asyncpg

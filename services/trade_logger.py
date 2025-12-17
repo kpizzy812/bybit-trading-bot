@@ -105,6 +105,19 @@ class TradeRecord:
     validation_status: Optional[str] = None
     scenario_snapshot: Optional[Dict] = None
 
+    # === SYNTRA METADATA (from API) ===
+    analysis_id: Optional[str] = None  # Unique analysis ID for feedback
+    primary_archetype: Optional[str] = None  # Rule-based archetype
+    ev_r: Optional[float] = None  # Expected Value in R
+    ev_grade: Optional[str] = None  # A, B, C, D
+    scenario_score: Optional[float] = None  # Normalized score
+    class_key: Optional[str] = None  # Class key for context gates
+    class_winrate: Optional[float] = None  # Historical class winrate
+    class_warning: Optional[str] = None  # Warning from class stats
+    prob_sl: Optional[float] = None  # P(stop loss)
+    prob_tp1: Optional[float] = None  # P(TP1)
+    probs_source: Optional[str] = None  # learning, llm, default
+
     # === POST-SL ANALYSIS ===
     post_sl_price_1h: Optional[float] = None
     post_sl_price_4h: Optional[float] = None

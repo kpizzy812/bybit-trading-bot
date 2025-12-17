@@ -6,6 +6,7 @@ Syntra AI Client
 """
 import asyncio
 import aiohttp
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any
 from loguru import logger
 
@@ -15,6 +16,92 @@ import config
 class SyntraAPIError(Exception):
     """Ошибка при работе с Syntra AI API"""
     pass
+
+
+@dataclass
+class NoTradeSignal:
+    """No-trade signal from API"""
+    should_not_trade: bool = False
+    confidence: float = 0.0
+    category: str = ""
+    reasons: List[str] = field(default_factory=list)
+    wait_for: Optional[List[str]] = None
+    estimated_wait_hours: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict]) -> Optional['NoTradeSignal']:
+        if not data:
+            return None
+        return cls(
+            should_not_trade=data.get("should_not_trade", False),
+            confidence=data.get("confidence", 0.0),
+            category=data.get("category", ""),
+            reasons=data.get("reasons", []),
+            wait_for=data.get("wait_for"),
+            estimated_wait_hours=data.get("estimated_wait_hours"),
+        )
+
+
+@dataclass
+class MarketContext:
+    """Market context from API"""
+    trend: str = "neutral"
+    phase: str = "unknown"
+    sentiment: str = "neutral"
+    volatility: str = "medium"
+    bias: str = "neutral"
+    strength: float = 0.5
+    rsi: Optional[float] = None
+    funding_rate_pct: Optional[float] = None
+    long_short_ratio: Optional[float] = None
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict]) -> 'MarketContext':
+        if not data:
+            return cls()
+        return cls(
+            trend=data.get("trend", "neutral"),
+            phase=data.get("phase", "unknown"),
+            sentiment=data.get("sentiment", "neutral"),
+            volatility=data.get("volatility", "medium"),
+            bias=data.get("bias", "neutral"),
+            strength=data.get("strength", 0.5),
+            rsi=data.get("rsi"),
+            funding_rate_pct=data.get("funding_rate_pct"),
+            long_short_ratio=data.get("long_short_ratio"),
+        )
+
+
+@dataclass
+class SyntraAnalysisResponse:
+    """Full response from Syntra API"""
+    success: bool
+    symbol: str
+    timeframe: str
+    analysis_id: str
+    current_price: float
+    market_context: MarketContext
+    scenarios: List[Dict[str, Any]]
+    no_trade: Optional[NoTradeSignal] = None
+    key_levels: Optional[Dict[str, Any]] = None
+    data_quality: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'SyntraAnalysisResponse':
+        return cls(
+            success=data.get("success", False),
+            symbol=data.get("symbol", ""),
+            timeframe=data.get("timeframe", "4h"),
+            analysis_id=data.get("analysis_id", ""),
+            current_price=data.get("current_price", 0.0),
+            market_context=MarketContext.from_dict(data.get("market_context")),
+            scenarios=data.get("scenarios", []),
+            no_trade=NoTradeSignal.from_dict(data.get("no_trade")),
+            key_levels=data.get("key_levels"),
+            data_quality=data.get("data_quality"),
+            metadata=data.get("metadata"),
+        )
 
 
 def _clean_error_response(status_code: int, error_text: str) -> str:
@@ -63,33 +150,29 @@ class SyntraClient:
 
         return headers
 
-    async def get_scenarios(
+    async def get_analysis(
         self,
         symbol: str,
         timeframe: str = "4h",
         max_scenarios: int = 3,
         user_params: Optional[Dict[str, Any]] = None
-    ) -> List[Dict]:
+    ) -> SyntraAnalysisResponse:
         """
-        Получить торговые сценарии от Syntra AI
+        Получить полный анализ от Syntra AI (включая market_context, no_trade, etc.)
 
         Args:
             symbol: Торговая пара (BTCUSDT, ETHUSDT, etc.)
             timeframe: Таймфрейм (1h, 4h, 1d)
             max_scenarios: Максимум сценариев (1-5)
-            user_params: Опциональные параметры пользователя для фильтрации
-                {
-                    "risk_usd": 10,
-                    "max_leverage": 5,
-                    "prefer_tight_stops": True
-                }
+            user_params: Опциональные параметры пользователя
 
         Returns:
-            List[Dict]: Список торговых сценариев
+            SyntraAnalysisResponse: Полный ответ API
 
         Example:
-            >>> scenarios = await syntra.get_scenarios("BTCUSDT")
-            >>> best = max(scenarios, key=lambda x: x["confidence"])
+            >>> analysis = await syntra.get_analysis("BTCUSDT")
+            >>> if analysis.no_trade and analysis.no_trade.should_not_trade:
+            >>>     print("Don't trade:", analysis.no_trade.reasons)
         """
         url = f"{self.api_url}/api/futures-scenarios"
 
@@ -99,11 +182,10 @@ class SyntraClient:
             "max_scenarios": max_scenarios
         }
 
-        # Добавить user_params если есть
         if user_params:
             payload["user_params"] = user_params
 
-        logger.info(f"Requesting scenarios: {symbol} {timeframe}")
+        logger.info(f"Requesting analysis: {symbol} {timeframe}")
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -126,13 +208,41 @@ class SyntraClient:
                             f"API returned error: {data.get('error', 'Unknown error')}"
                         )
 
-                    scenarios = data.get("scenarios", [])
-                    logger.info(f"Received {len(scenarios)} scenarios for {symbol}")
+                    analysis = SyntraAnalysisResponse.from_dict(data)
 
-                    return scenarios
+                    # Log summary
+                    no_trade_info = ""
+                    if analysis.no_trade and analysis.no_trade.should_not_trade:
+                        no_trade_info = f", NO_TRADE: {analysis.no_trade.category}"
+
+                    logger.info(
+                        f"Received analysis for {symbol}: "
+                        f"{len(analysis.scenarios)} scenarios, "
+                        f"ctx={analysis.market_context.trend}/{analysis.market_context.sentiment}"
+                        f"{no_trade_info}"
+                    )
+
+                    # Save to DB if enabled
+                    try:
+                        from database.repository import ScenarioRepository
+                        await ScenarioRepository.save_analysis_response(
+                            analysis_id=analysis.analysis_id,
+                            symbol=analysis.symbol,
+                            timeframe=analysis.timeframe,
+                            current_price=analysis.current_price,
+                            market_context=data.get("market_context", {}),
+                            scenarios=analysis.scenarios,
+                            no_trade=data.get("no_trade"),
+                            key_levels=analysis.key_levels,
+                            data_quality=analysis.data_quality,
+                        )
+                    except Exception as db_err:
+                        logger.debug(f"DB save skipped: {db_err}")
+
+                    return analysis
 
         except SyntraAPIError:
-            raise  # Не оборачивать повторно
+            raise
 
         except asyncio.TimeoutError:
             logger.error(f"Timeout after {self.timeout}s waiting for Syntra AI response")
@@ -145,6 +255,22 @@ class SyntraClient:
         except Exception as e:
             logger.error(f"Unexpected error ({type(e).__name__}): {e}", exc_info=True)
             raise SyntraAPIError(f"Unexpected error ({type(e).__name__}): {e}")
+
+    async def get_scenarios(
+        self,
+        symbol: str,
+        timeframe: str = "4h",
+        max_scenarios: int = 3,
+        user_params: Optional[Dict[str, Any]] = None
+    ) -> List[Dict]:
+        """
+        Получить торговые сценарии от Syntra AI (legacy метод для совместимости)
+
+        Returns:
+            List[Dict]: Список торговых сценариев
+        """
+        analysis = await self.get_analysis(symbol, timeframe, max_scenarios, user_params)
+        return analysis.scenarios
 
     async def calculate_position_size(
         self,

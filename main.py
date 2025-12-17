@@ -98,6 +98,16 @@ async def main():
     await settings_storage.connect()
     await lock_manager.connect()
 
+    # Инициализация PostgreSQL (если включён)
+    if config.POSTGRES_ENABLED:
+        logger.info("Initializing PostgreSQL...")
+        try:
+            from database import init_db
+            await init_db()
+            logger.info("🗄️ PostgreSQL connected")
+        except Exception as e:
+            logger.warning(f"PostgreSQL init failed (non-critical): {e}")
+
     # Инициализация trade logger
     logger.info("Initializing trade logger...")
     trade_logger = create_trade_logger()
@@ -235,6 +245,13 @@ async def main():
         await settings_storage.close()
         await lock_manager.close()
         await trade_logger.close()
+        # Close PostgreSQL
+        if config.POSTGRES_ENABLED:
+            try:
+                from database import close_db
+                await close_db()
+            except Exception:
+                pass
         await bot.session.close()
 
 

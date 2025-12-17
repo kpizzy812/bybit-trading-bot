@@ -26,7 +26,13 @@ from bot.states.trade_states import AIScenarioStates
 from bot.keyboards import ai_scenarios_kb
 from bot.keyboards.main_menu import get_main_menu
 from datetime import datetime
-from services.syntra_client import get_syntra_client, SyntraAPIError
+from services.syntra_client import (
+    get_syntra_client,
+    SyntraAPIError,
+    SyntraAnalysisResponse,
+    NoTradeSignal,
+    MarketContext
+)
 from services.bybit import BybitClient
 from services.risk_calculator import RiskCalculator
 from services.trade_logger import TradeRecord
@@ -452,13 +458,15 @@ async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings
             "max_leverage": config.MAX_LEVERAGE,
         }
 
-        # Запросить сценарии
-        scenarios = await syntra.get_scenarios(
+        # Запросить полный анализ (не только сценарии)
+        analysis = await syntra.get_analysis(
             symbol=symbol,
             timeframe=timeframe,
             max_scenarios=3,
             user_params=user_params
         )
+
+        scenarios = analysis.scenarios
 
         if not scenarios:
             await callback.message.edit_text(
@@ -470,11 +478,41 @@ async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings
             await state.set_state(AIScenarioStates.choosing_symbol)
             return
 
-        # Сохранить сценарии в state
-        await state.update_data(scenarios=scenarios)
+        # Сохранить полный анализ в state
+        await state.update_data(
+            scenarios=scenarios,
+            analysis_id=analysis.analysis_id,
+            current_price=analysis.current_price,
+            market_context={
+                "trend": analysis.market_context.trend,
+                "phase": analysis.market_context.phase,
+                "sentiment": analysis.market_context.sentiment,
+                "volatility": analysis.market_context.volatility,
+                "bias": analysis.market_context.bias,
+                "strength": analysis.market_context.strength,
+                "rsi": analysis.market_context.rsi,
+                "funding_rate_pct": analysis.market_context.funding_rate_pct,
+            },
+            no_trade={
+                "should_not_trade": analysis.no_trade.should_not_trade if analysis.no_trade else False,
+                "confidence": analysis.no_trade.confidence if analysis.no_trade else 0,
+                "category": analysis.no_trade.category if analysis.no_trade else "",
+                "reasons": analysis.no_trade.reasons if analysis.no_trade else [],
+                "wait_for": analysis.no_trade.wait_for if analysis.no_trade else None,
+            } if analysis.no_trade else None,
+            key_levels=analysis.key_levels,
+        )
 
-        # Показать список сценариев
-        await show_scenarios_list(callback.message, scenarios, symbol, timeframe)
+        # Показать список сценариев с market_context и no_trade
+        await show_scenarios_list(
+            callback.message,
+            scenarios,
+            symbol,
+            timeframe,
+            market_context=analysis.market_context,
+            no_trade=analysis.no_trade,
+            current_price=analysis.current_price
+        )
 
     except SyntraAPIError as e:
         logger.error(f"Syntra API error: {e}")
@@ -495,10 +533,69 @@ async def ai_analyze_market(callback: CallbackQuery, state: FSMContext, settings
         await state.set_state(AIScenarioStates.choosing_symbol)
 
 
-async def show_scenarios_list(message: Message, scenarios: list, symbol: str, timeframe: str):
-    """Показать список сценариев"""
-    # Формируем текст со списком
-    text = f"🤖 <b>AI Scenarios: {symbol} ({timeframe})</b>\n\n"
+async def show_scenarios_list(
+    message: Message,
+    scenarios: list,
+    symbol: str,
+    timeframe: str,
+    market_context: Optional[MarketContext] = None,
+    no_trade: Optional[NoTradeSignal] = None,
+    current_price: float = 0.0
+):
+    """Показать список сценариев с market context и no_trade предупреждением"""
+
+    # === HEADER с текущей ценой ===
+    text = f"🤖 <b>AI Scenarios: {symbol} ({timeframe})</b>\n"
+    if current_price > 0:
+        text += f"💰 Price: ${current_price:,.2f}\n"
+    text += "\n"
+
+    # === MARKET CONTEXT ===
+    if market_context:
+        trend_emoji = {"bullish": "📈", "bearish": "📉", "neutral": "➡️"}.get(market_context.trend, "➡️")
+        sentiment_emoji = {"greed": "🟢", "fear": "🔴", "neutral": "⚪", "extreme_greed": "🟢🟢", "extreme_fear": "🔴🔴"}.get(market_context.sentiment, "⚪")
+        vol_emoji = {"low": "🔵", "medium": "🟡", "high": "🔴"}.get(market_context.volatility, "🟡")
+
+        text += f"<b>📊 Market:</b> {trend_emoji} {market_context.trend.capitalize()}"
+        text += f" | {sentiment_emoji} {market_context.sentiment.capitalize()}"
+        text += f" | {vol_emoji} Vol: {market_context.volatility}\n"
+
+        # RSI и Funding если есть
+        extras = []
+        if market_context.rsi:
+            rsi_indicator = "🔴" if market_context.rsi > 70 else "🟢" if market_context.rsi < 30 else ""
+            extras.append(f"RSI: {market_context.rsi:.0f}{rsi_indicator}")
+        if market_context.funding_rate_pct is not None:
+            fund_emoji = "🔴" if abs(market_context.funding_rate_pct) > 0.05 else ""
+            extras.append(f"Fund: {market_context.funding_rate_pct:+.3f}%{fund_emoji}")
+        if extras:
+            text += f"   {' | '.join(extras)}\n"
+        text += "\n"
+
+    # === NO-TRADE WARNING ===
+    if no_trade and no_trade.should_not_trade:
+        category_emoji = {
+            "chop": "🌀",
+            "extreme_sentiment": "⚠️",
+            "low_liquidity": "💧",
+            "news_risk": "📰",
+            "technical_conflict": "⚔️",
+        }.get(no_trade.category, "⚠️")
+
+        text += f"{category_emoji} <b>⚠️ CAUTION: {no_trade.category.upper()}</b> ({no_trade.confidence*100:.0f}%)\n"
+
+        # Показываем первые 2 причины
+        for reason in no_trade.reasons[:2]:
+            text += f"   • {reason}\n"
+
+        # Wait for
+        if no_trade.wait_for:
+            text += f"   <i>Ждать: {', '.join(no_trade.wait_for[:2])}</i>\n"
+
+        text += "\n"
+
+    # === SCENARIOS LIST ===
+    text += "<b>📋 Сценарии:</b>\n\n"
 
     for i, scenario in enumerate(scenarios, 1):
         bias = scenario.get("bias", "neutral")
@@ -506,6 +603,21 @@ async def show_scenarios_list(message: Message, scenarios: list, symbol: str, ti
 
         name = scenario.get("name", f"Scenario {i}")
         confidence = scenario.get("confidence", 0) * 100
+
+        # EV Grade если есть
+        ev_metrics = scenario.get("ev_metrics", {})
+        ev_grade = ev_metrics.get("ev_grade", "")
+        ev_r = ev_metrics.get("ev_r")
+        ev_info = ""
+        if ev_grade:
+            grade_emoji = {"A": "🅰️", "B": "🅱️", "C": "©️", "D": "🅳"}.get(ev_grade, "")
+            ev_info = f" {grade_emoji}"
+            if ev_r is not None:
+                ev_info += f" EV:{ev_r:+.2f}R"
+
+        # Class warning
+        class_warning = scenario.get("class_warning")
+        warning_mark = " ⚠️" if class_warning else ""
 
         # Entry zone
         entry = scenario.get("entry", {})
@@ -516,25 +628,25 @@ async def show_scenarios_list(message: Message, scenarios: list, symbol: str, ti
         stop_loss = scenario.get("stop_loss", {})
         sl_price = stop_loss.get("recommended", 0)
 
-        # Все TP targets (показываем все 3)
+        # Все TP targets
         targets = scenario.get("targets", [])
 
         # Формируем текст сценария
-        text += f"{i}. {bias_emoji} <b>{name}</b> ({confidence:.0f}%)\n"
-        text += f"   Entry: ${entry_min:.2f} - ${entry_max:.2f}\n"
-        text += f"   Stop: ${sl_price:.2f}\n"
+        text += f"{i}. {bias_emoji} <b>{name}</b> ({confidence:.0f}%){ev_info}{warning_mark}\n"
+        text += f"   Entry: ${entry_min:,.2f} - ${entry_max:,.2f}\n"
+        text += f"   Stop: ${sl_price:,.2f}\n"
 
-        # Показываем каждый TP с его RR и % закрытия
+        # Показываем TP
         if targets:
             for idx, target in enumerate(targets[:3], 1):
                 tp_price = target.get("price", 0)
                 tp_rr = target.get("rr", 0)
                 partial_pct = target.get("partial_close_pct", 100)
-                text += f"   TP{idx}: ${tp_price:.2f} (RR {tp_rr:.1f}x) - {partial_pct}%\n"
+                text += f"   TP{idx}: ${tp_price:,.2f} (RR {tp_rr:.1f}x) - {partial_pct}%\n"
         else:
             text += f"   TP: N/A\n"
 
-        text += "\n"  # Пустая строка между сценариями
+        text += "\n"
 
     text += "📌 Выбери сценарий для деталей:"
 
@@ -568,7 +680,7 @@ async def ai_scenario_selected(callback: CallbackQuery, state: FSMContext):
 
 
 async def show_scenario_detail(message: Message, scenario: dict, scenario_index: int):
-    """Показать детальную карточку сценария"""
+    """Показать детальную карточку сценария с EV метриками и class stats"""
 
     # Базовая информация
     name = scenario.get("name", "Unknown Scenario")
@@ -576,13 +688,16 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
     bias_emoji = "🟢" if bias == "long" else "🔴" if bias == "short" else "⚪"
     confidence = scenario.get("confidence", 0) * 100
 
+    # Archetype
+    archetype = scenario.get("primary_archetype", "")
+    archetype_text = f" [{archetype}]" if archetype else ""
+
     # Entry Plan (ladder) или обычный Entry
     entry_plan = scenario.get("entry_plan")
     entry = scenario.get("entry", {})
 
     # Формируем текст для entry
     if entry_plan and entry_plan.get("orders"):
-        # Ladder mode - показываем каждый ордер
         orders = entry_plan.get("orders", [])
         mode = entry_plan.get("mode", "ladder")
 
@@ -591,24 +706,22 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
             price = order.get("price", 0)
             size_pct = order.get("size_pct", 0)
             tag = order.get("tag", f"E{i}")
-            entry_text += f"   E{i}: ${price:.2f} ({size_pct}%) - {tag}\n"
+            entry_text += f"   E{i}: ${price:,.2f} ({size_pct}%) - {tag}\n"
 
-        # Считаем avg для отображения
         prices = [o.get("price", 0) for o in orders]
         weights = [o.get("size_pct", 0) for o in orders]
         total_weight = sum(weights)
         if total_weight > 0:
             entry_avg = sum(p * w for p, w in zip(prices, weights)) / total_weight
-            entry_text += f"   <i>Avg: ${entry_avg:.2f}</i>"
+            entry_text += f"   <i>Avg: ${entry_avg:,.2f}</i>"
     else:
-        # Single entry - старый формат
         entry_min = entry.get("price_min", 0)
         entry_max = entry.get("price_max", 0)
         entry_avg = (entry_min + entry_max) / 2 if entry_min and entry_max else 0
         entry_type = entry.get("type", "market_order")
 
-        entry_text = f"💹 <b>Entry Zone:</b> ${entry_min:.2f} - ${entry_max:.2f}\n"
-        entry_text += f"   Avg: ${entry_avg:.2f} ({entry_type})"
+        entry_text = f"💹 <b>Entry Zone:</b> ${entry_min:,.2f} - ${entry_max:,.2f}\n"
+        entry_text += f"   Avg: ${entry_avg:,.2f} ({entry_type})"
 
     # Stop Loss
     stop_loss = scenario.get("stop_loss", {})
@@ -623,12 +736,64 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
         price = target.get("price", 0)
         partial_close = target.get("partial_close_pct", 100)
         rr = target.get("rr", 0)
-        targets_text += f"   TP{level}: ${price:.2f} ({partial_close}%) - RR {rr:.1f}\n"
+        targets_text += f"   TP{level}: ${price:,.2f} ({partial_close}%) - RR {rr:.1f}\n"
 
     # Leverage
     leverage_info = scenario.get("leverage", {})
-    lev_recommended = leverage_info.get("recommended", "5x")
-    lev_max_safe = leverage_info.get("max_safe", "10x")
+    lev_recommended = leverage_info.get("recommended", "5x") if isinstance(leverage_info, dict) else f"{leverage_info}x"
+    lev_max_safe = leverage_info.get("max_safe", "10x") if isinstance(leverage_info, dict) else f"{leverage_info}x"
+
+    # === EV METRICS ===
+    ev_metrics = scenario.get("ev_metrics", {})
+    ev_text = ""
+    if ev_metrics:
+        ev_r = ev_metrics.get("ev_r")
+        ev_grade = ev_metrics.get("ev_grade", "")
+        scenario_score = ev_metrics.get("scenario_score")
+
+        grade_emoji = {"A": "🅰️", "B": "🅱️", "C": "©️", "D": "🅳"}.get(ev_grade, "")
+        ev_text = f"\n📈 <b>Expected Value:</b> {grade_emoji} Grade {ev_grade}"
+        if ev_r is not None:
+            ev_color = "+" if ev_r >= 0 else ""
+            ev_text += f" | EV: {ev_color}{ev_r:.2f}R"
+        if scenario_score is not None:
+            ev_text += f" | Score: {scenario_score:.0f}"
+        ev_text += "\n"
+
+    # === OUTCOME PROBS ===
+    outcome_probs = scenario.get("outcome_probs", {})
+    probs_text = ""
+    if outcome_probs and outcome_probs.get("source"):
+        prob_sl = outcome_probs.get("sl", 0)
+        prob_tp1 = outcome_probs.get("tp1", 0)
+        prob_tp2 = outcome_probs.get("tp2")
+        prob_tp3 = outcome_probs.get("tp3")
+        probs_source = outcome_probs.get("source", "")
+        sample_size = outcome_probs.get("sample_size")
+
+        probs_text = f"📊 <b>Outcome Probs</b> <i>({probs_source}"
+        if sample_size:
+            probs_text += f", n={sample_size}"
+        probs_text += ")</i>:\n"
+        probs_text += f"   SL: {prob_sl*100:.0f}% | TP1: {prob_tp1*100:.0f}%"
+        if prob_tp2:
+            probs_text += f" | TP2: {prob_tp2*100:.0f}%"
+        if prob_tp3:
+            probs_text += f" | TP3: {prob_tp3*100:.0f}%"
+        probs_text += "\n"
+
+    # === CLASS STATS / WARNING ===
+    class_stats = scenario.get("class_stats", {})
+    class_warning = scenario.get("class_warning")
+    class_text = ""
+
+    if class_warning:
+        class_text = f"\n⚠️ <b>Warning:</b> {class_warning}\n"
+    elif class_stats and class_stats.get("sample_size", 0) >= 20:
+        winrate = class_stats.get("winrate", 0)
+        avg_pnl_r = class_stats.get("avg_pnl_r", 0)
+        sample = class_stats.get("sample_size", 0)
+        class_text = f"\n📉 <b>Class Stats</b> <i>(n={sample})</i>: WR {winrate*100:.0f}% | Avg: {avg_pnl_r:+.2f}R\n"
 
     # Why
     why = scenario.get("why", {})
@@ -638,12 +803,12 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
 
     # Формируем карточку
     card = f"""
-{bias_emoji} <b>{name}</b>
+{bias_emoji} <b>{name}</b>{archetype_text}
 📊 Confidence: {confidence:.0f}%
-
+{ev_text}{probs_text}{class_text}
 {entry_text}
 
-🛑 <b>Stop Loss:</b> ${sl_price:.2f}
+🛑 <b>Stop Loss:</b> ${sl_price:,.2f}
    {sl_reason if sl_reason else ""}
 
 🎯 <b>Targets:</b>
@@ -652,14 +817,14 @@ async def show_scenario_detail(message: Message, scenario: dict, scenario_index:
 📊 <b>Leverage:</b> {lev_recommended} (max safe: {lev_max_safe})
 """
 
-    # Добавляем факторы если есть
+    # Факторы
     if bullish_factors:
-        card += "\n🟢 <b>Bullish factors:</b>\n"
-        for factor in bullish_factors[:2]:  # Первые 2
+        card += "\n🟢 <b>Bullish:</b>\n"
+        for factor in bullish_factors[:2]:
             card += f"   • {factor}\n"
 
     if bearish_factors:
-        card += "\n🔴 <b>Bearish factors:</b>\n"
+        card += "\n🔴 <b>Bearish:</b>\n"
         for factor in bearish_factors[:2]:
             card += f"   • {factor}\n"
 
@@ -1208,6 +1373,11 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                 margin_usd = calculate_margin(p_avg, plan_qty, leverage)
                 entry_fee_estimate = calculate_fee(p_avg, plan_qty, is_taker=False)
 
+                # Extract EV metrics and class stats from scenario
+                ev_metrics = scenario.get("ev_metrics", {})
+                class_stats = scenario.get("class_stats", {})
+                outcome_probs = scenario.get("outcome_probs", {})
+
                 trade_record = TradeRecord(
                     trade_id=trade_id,
                     user_id=user_id,
@@ -1237,7 +1407,19 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                     scenario_confidence=scenario.get("confidence"),
                     timeframe=data.get("timeframe"),
                     entry_reason=scenario.get("name"),
-                    scenario_snapshot=scenario
+                    scenario_snapshot=scenario,
+                    # Syntra metadata
+                    analysis_id=data.get("analysis_id"),
+                    primary_archetype=scenario.get("primary_archetype"),
+                    ev_r=ev_metrics.get("ev_r"),
+                    ev_grade=ev_metrics.get("ev_grade"),
+                    scenario_score=ev_metrics.get("scenario_score"),
+                    class_key=class_stats.get("class_key"),
+                    class_winrate=class_stats.get("winrate"),
+                    class_warning=scenario.get("class_warning"),
+                    prob_sl=outcome_probs.get("sl"),
+                    prob_tp1=outcome_probs.get("tp1"),
+                    probs_source=outcome_probs.get("source"),
                 )
                 await trade_logger.log_trade(trade_record)
                 logger.info(f"Trade record created for entry_plan: {trade_id}")
@@ -1423,6 +1605,11 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
             # Генерируем scenario_id для связки с AI
             scenario_uuid = str(uuid.uuid4())
 
+            # Extract EV metrics and class stats from scenario
+            ev_metrics = scenario.get("ev_metrics", {})
+            class_stats = scenario.get("class_stats", {})
+            outcome_probs = scenario.get("outcome_probs", {})
+
             trade_record = TradeRecord(
                 trade_id=trade_id,
                 user_id=user_id,
@@ -1449,7 +1636,19 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                 scenario_confidence=scenario.get("confidence"),
                 timeframe=data.get("timeframe"),
                 entry_reason=scenario.get("name"),
-                scenario_snapshot=scenario  # Сохраняем весь сценарий
+                scenario_snapshot=scenario,
+                # Syntra metadata
+                analysis_id=data.get("analysis_id"),
+                primary_archetype=scenario.get("primary_archetype"),
+                ev_r=ev_metrics.get("ev_r"),
+                ev_grade=ev_metrics.get("ev_grade"),
+                scenario_score=ev_metrics.get("scenario_score"),
+                class_key=class_stats.get("class_key"),
+                class_winrate=class_stats.get("winrate"),
+                class_warning=scenario.get("class_warning"),
+                prob_sl=outcome_probs.get("sl"),
+                prob_tp1=outcome_probs.get("tp1"),
+                probs_source=outcome_probs.get("source"),
             )
             await trade_logger.log_trade(trade_record)
             logger.info(f"Trade entry logged for {symbol} @ ${actual_entry_price:.2f} (scenario: {scenario_uuid})")

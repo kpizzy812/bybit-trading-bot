@@ -120,6 +120,19 @@ REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
 REDIS_DB = int(os.getenv('REDIS_DB', 0))
 REDIS_PASSWORD = os.getenv('REDIS_PASSWORD')  # None if not set
 
+
+# ============================================================
+# POSTGRESQL (for analytics and scenario storage)
+# ============================================================
+
+POSTGRES_ENABLED = os.getenv('POSTGRES_ENABLED', 'false').lower() == 'true'
+POSTGRES_HOST = os.getenv('POSTGRES_HOST', 'localhost')
+POSTGRES_PORT = int(os.getenv('POSTGRES_PORT', 5432))
+POSTGRES_DB = os.getenv('POSTGRES_DB', 'futures_bot')
+POSTGRES_USER = os.getenv('POSTGRES_USER', 'postgres')
+POSTGRES_PASSWORD = os.getenv('POSTGRES_PASSWORD', '')
+POSTGRES_ECHO = os.getenv('POSTGRES_ECHO', 'false').lower() == 'true'
+
 # Bot Settings
 DEFAULT_TESTNET_MODE = os.getenv('DEFAULT_TESTNET_MODE', 'true').lower() == 'true'
 
