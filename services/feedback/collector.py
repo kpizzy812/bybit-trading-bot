@@ -23,10 +23,107 @@ from services.feedback.models import (
     ExitReason,
     TradeLabel,
     VolatilityRegime,
+    TerminalOutcome,
 )
 from services.feedback.archetype import ArchetypeClassifier
 
 logger = logging.getLogger(__name__)
+
+
+def get_terminal_outcome(
+    trade: 'TradeRecord',
+    snapshot: Dict[str, Any],
+) -> tuple[str, List[str], int]:
+    """
+    Определить terminal outcome по max_price_seen.
+
+    Terminal outcome = MAX TP HIT, НЕ exit_reason последнего fill.
+    Использует min_price_seen / max_price_seen из TradeRecord.
+
+    Args:
+        trade: TradeRecord с min_price_seen / max_price_seen
+        snapshot: scenario_snapshot с targets
+
+    Returns:
+        (terminal_outcome, flags, max_tp_reached)
+    """
+    flags = []
+
+    # Извлекаем targets из snapshot
+    targets = snapshot.get("targets", [])
+    if not targets:
+        # Нет targets — fallback на exit_reason
+        if trade.exit_reason in ("manual", "timeout", "breakeven"):
+            return TerminalOutcome.OTHER.value, ["no_targets_in_snapshot"], 0
+        return TerminalOutcome.SL.value, ["no_targets_in_snapshot"], 0
+
+    # Получаем цены TP (сортируем по порядку)
+    tp_prices = []
+    for t in targets:
+        price = t.get("price")
+        if price is not None:
+            tp_prices.append(float(price))
+
+    n_targets = len(tp_prices)
+    if n_targets == 0:
+        if trade.exit_reason in ("manual", "timeout", "breakeven"):
+            return TerminalOutcome.OTHER.value, ["no_tp_prices"], 0
+        return TerminalOutcome.SL.value, ["no_tp_prices"], 0
+
+    if n_targets < 3:
+        flags.append(f"reduced_targets_{n_targets}")
+
+    # Получаем MFE price
+    entry_price = trade.entry_price
+    side = trade.side.lower() if trade.side else "long"
+
+    if side == "long":
+        mfe_price = trade.max_price_seen or entry_price
+    else:  # short
+        mfe_price = trade.min_price_seen or entry_price
+
+    if mfe_price is None or mfe_price == entry_price:
+        # Нет движения — SL или OTHER
+        if trade.exit_reason in ("manual", "timeout", "breakeven"):
+            return TerminalOutcome.OTHER.value, flags, 0
+        return TerminalOutcome.SL.value, flags, 0
+
+    # Проверяем какой TP был достигнут (с допуском)
+    # Допуск = 0.1% от цены (примерный tick margin)
+    tick_margin_pct = 0.001
+
+    max_tp_reached = 0
+
+    # Проверяем от старшего TP к младшему
+    for i in range(n_targets - 1, -1, -1):
+        tp_price = tp_prices[i]
+        margin = tp_price * tick_margin_pct
+
+        if side == "long":
+            if mfe_price >= tp_price - margin:
+                max_tp_reached = i + 1
+                if mfe_price < tp_price:
+                    flags.append("tp_touch_by_wick")
+                break
+        else:  # short
+            if mfe_price <= tp_price + margin:
+                max_tp_reached = i + 1
+                if mfe_price > tp_price:
+                    flags.append("tp_touch_by_wick")
+                break
+
+    # Маппинг max_tp_reached → terminal_outcome
+    if max_tp_reached >= 3:
+        return TerminalOutcome.TP3.value, flags, 3
+    elif max_tp_reached == 2:
+        return TerminalOutcome.TP2.value, flags, 2
+    elif max_tp_reached == 1:
+        return TerminalOutcome.TP1.value, flags, 1
+    else:
+        # Не дошли ни до одного TP
+        if trade.exit_reason in ("manual", "timeout", "breakeven"):
+            return TerminalOutcome.OTHER.value, flags, 0
+        return TerminalOutcome.SL.value, flags, 0
 
 
 class FeedbackCollector:
@@ -263,6 +360,9 @@ class FeedbackCollector:
         if trade.risk_usd and trade.risk_usd > 0:
             pnl_r = (trade.pnl_usd or 0) / trade.risk_usd
 
+        # Terminal outcome (для EV системы)
+        terminal_outcome, terminal_flags, max_tp = get_terminal_outcome(trade, snapshot)
+
         # Factor contributions (базовый анализ)
         factor_contributions = self._analyze_factor_contributions(trade, factors, label)
 
@@ -273,6 +373,9 @@ class FeedbackCollector:
             factors=factors,
             label=label,
             pnl_r=pnl_r,
+            terminal_outcome=terminal_outcome,
+            terminal_outcome_flags=terminal_flags,
+            max_tp_reached=max_tp,
             factor_contributions=factor_contributions,
         )
 

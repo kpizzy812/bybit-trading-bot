@@ -38,6 +38,20 @@ class ExitReason(str, Enum):
     BREAKEVEN = "breakeven"
 
 
+class TerminalOutcome(str, Enum):
+    """
+    Terminal outcome = MAX TP HIT за время сделки.
+
+    НЕ путать с exit_reason! Если взяли 30% на TP1, а остаток
+    выбило по SL — exit_reason="sl", но terminal_outcome="tp1".
+    """
+    SL = "sl"        # Не дошли ни до одного TP
+    TP1 = "tp1"      # Дошли до TP1, но не до TP2
+    TP2 = "tp2"      # Дошли до TP2, но не до TP3
+    TP3 = "tp3"      # Дошли до TP3
+    OTHER = "other"  # manual/timeout/breakeven ДО любого TP
+
+
 class TradeLabel(str, Enum):
     """Результат сделки"""
     WIN = "win"
@@ -231,6 +245,12 @@ class Attribution(BaseModel):
     # Outcome
     label: TradeLabel
     pnl_r: float
+
+    # Terminal Outcome (для EV расчёта)
+    terminal_outcome: Optional[str] = None  # "sl" | "tp1" | "tp2" | "tp3" | "other"
+    terminal_outcome_flags: List[str] = Field(default_factory=list)
+    # e.g., ["tp_touch_by_wick", "reduced_targets"]
+    max_tp_reached: int = 0  # 0, 1, 2, или 3
 
     # Factor contributions (rule-based analysis)
     factor_contributions: Dict[str, float] = Field(default_factory=dict)
