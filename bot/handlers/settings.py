@@ -2,8 +2,10 @@
 Хендлеры для управления настройками
 """
 from aiogram import Router, F
-from aiogram.types import CallbackQuery
+from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
 
+from bot.states.trade_states import SettingsStates
 from bot.keyboards.settings_kb import (
     get_settings_menu_kb,
     get_default_risk_kb,
@@ -310,6 +312,58 @@ async def set_max_risk_value(callback: CallbackQuery, settings_storage):
 
     # Возвращаемся к лимитам
     await set_safety_limits_menu(callback)
+
+
+@router.callback_query(F.data == "set_max_risk_custom")
+async def set_max_risk_custom_start(callback: CallbackQuery, state: FSMContext):
+    """Начать ввод кастомного значения макс. риска"""
+    await callback.answer()
+    await state.set_state(SettingsStates.entering_max_risk)
+
+    await callback.message.edit_text(
+        "✏️ <b>Кастомный максимальный риск</b>\n\n"
+        "Введи значение в USD (от 1 до 1000):\n\n"
+        "Например: <code>50</code> или <code>150</code>"
+    )
+
+
+@router.message(SettingsStates.entering_max_risk)
+async def set_max_risk_custom_process(message: Message, state: FSMContext, settings_storage):
+    """Обработать введённое значение макс. риска"""
+    user_id = message.from_user.id
+
+    try:
+        # Парсим значение
+        text = message.text.strip().replace(",", ".").replace("$", "")
+        new_max_risk = float(text)
+
+        # Валидация
+        if new_max_risk < 1:
+            await message.answer("⚠️ Минимальное значение: $1")
+            return
+
+        if new_max_risk > 1000:
+            await message.answer("⚠️ Максимальное значение: $1000")
+            return
+
+        # Сохраняем
+        await settings_storage.update_setting(user_id, 'max_risk_per_trade', new_max_risk)
+
+        await state.clear()
+
+        await message.answer(
+            f"✅ Макс. риск установлен: <b>${new_max_risk:.0f}</b>\n\n"
+            f"Вернись в настройки через меню.",
+            reply_markup=None
+        )
+
+        logger.info(f"User {user_id} set custom max_risk_per_trade: ${new_max_risk}")
+
+    except ValueError:
+        await message.answer(
+            "⚠️ Неверный формат!\n\n"
+            "Введи число, например: <code>50</code>"
+        )
 
 
 # Max Margin

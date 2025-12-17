@@ -234,8 +234,8 @@ def get_max_risk_kb(current_max_risk: float) -> InlineKeyboardMarkup:
     """
     builder = InlineKeyboardBuilder()
 
-    # Пресеты
-    risk_presets = [10, 20, 30, 50]
+    # Пресеты (расширенный список)
+    risk_presets = [10, 20, 30, 50, 75, 100]
 
     for risk in risk_presets:
         text = f"${risk}"
@@ -247,7 +247,12 @@ def get_max_risk_kb(current_max_risk: float) -> InlineKeyboardMarkup:
             callback_data=f"set_max_risk_val:{risk}"
         )
 
-    builder.adjust(2)
+    builder.adjust(3)
+
+    # Custom ввод
+    builder.row(
+        InlineKeyboardButton(text="✏️ Ввести своё значение", callback_data="set_max_risk_custom")
+    )
 
     builder.row(
         InlineKeyboardButton(text="◀️ Назад", callback_data="set_safety_limits")
