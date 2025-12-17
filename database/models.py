@@ -272,6 +272,10 @@ class Trade(Base):
     mfe_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     mfe_r: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
 
+    # === REAL EV TRACKING ===
+    r_result: Mapped[Optional[float]] = mapped_column(Float, nullable=True)  # NET PnL в R
+    market_regime: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # "{trend}_{phase}"
+
     # Status
     status: Mapped[str] = mapped_column(String(20), default="open")  # open, partial, closed
     testnet: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -309,6 +313,10 @@ class Trade(Base):
         Index('ix_trades_symbol_outcome', 'symbol', 'outcome'),
         Index('ix_trades_archetype_outcome', 'scenario_archetype', 'outcome'),
         Index('ix_trades_analysis_id', 'analysis_id'),
+        # Real EV aggregation indexes
+        Index('ix_trades_status_closed_at', 'status', 'closed_at'),
+        Index('ix_trades_archetype_tf_closed', 'scenario_archetype', 'timeframe', 'closed_at'),
+        Index('ix_trades_regime_closed', 'market_regime', 'closed_at'),
     )
 
 
@@ -350,3 +358,73 @@ class UserSettingsDB(Base):
     auto_breakeven_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     max_active_positions: Mapped[int] = mapped_column(Integer, default=5)
     confidence_risk_scaling: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+# =============================================================================
+# REAL EV TRACKING MODELS
+# =============================================================================
+
+class EVGroupState(Base):
+    """
+    Персистентное состояние группы для auto/manual disable.
+    Хранит текущий статус группировки сценариев по Real EV.
+    """
+    __tablename__ = "ev_group_state"
+
+    group_key: Mapped[str] = mapped_column(String(200), primary_key=True)  # pullback_to_ema50:4h:bullish_accumulation
+    level: Mapped[str] = mapped_column(String(10))  # L1, L2, L3
+
+    # Disable state
+    is_disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    disabled_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # для временных банов
+    disable_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # auto_disabled, manual_disabled
+
+    # Last evaluation
+    last_eval_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_real_ev: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    last_rolling_ev: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    last_sample_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_winrate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # Manual override
+    manual_override: Mapped[bool] = mapped_column(Boolean, default=False)
+    override_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # user_id
+    override_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    override_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EVGateLog(Base):
+    """
+    Лог всех gate решений для аудита.
+    Записывается каждый раз когда проверяется возможность торговли.
+    """
+    __tablename__ = "ev_gate_log"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, index=True)
+
+    # Контекст запроса
+    archetype: Mapped[str] = mapped_column(String(50))
+    timeframe: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    market_regime: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    symbol: Mapped[str] = mapped_column(String(20))
+
+    # Результат проверки
+    status: Mapped[str] = mapped_column(String(20))  # NO_DATA, WARN, SOFT_BLOCK, BLOCK, OVERRIDE
+    selected_level: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # L1, L2, L3
+    selected_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    real_ev: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rolling_ev: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    sample_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Действие пользователя
+    user_action: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)  # proceeded, skipped, force_override
+
+    __table_args__ = (
+        Index('ix_ev_gate_log_user_created', 'user_id', 'created_at'),
+        Index('ix_ev_gate_log_status', 'status'),
+    )

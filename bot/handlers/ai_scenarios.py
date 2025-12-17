@@ -39,6 +39,7 @@ from services.trade_logger import TradeRecord
 from services.entry_plan import EntryPlan, EntryOrder
 from services.scenarios_cache import get_scenarios_cache
 from services.charts import get_chart_generator
+from services.real_ev import get_gate_checker, GateStatus
 from utils.validators import round_qty, round_price
 
 router = Router()
@@ -830,6 +831,7 @@ async def ai_scenario_selected(callback: CallbackQuery, state: FSMContext):
     symbol = data.get("symbol", "")
     timeframe = data.get("timeframe", "")
     current_price = data.get("current_price", 0.0)
+    market_context = data.get("market_context")
 
     await state.update_data(selected_scenario_index=scenario_index)
     await state.set_state(AIScenarioStates.viewing_detail)
@@ -837,7 +839,8 @@ async def ai_scenario_selected(callback: CallbackQuery, state: FSMContext):
     # Показать детали сценария с графиком
     await show_scenario_detail(
         callback.message, scenario, scenario_index,
-        symbol=symbol, timeframe=timeframe, current_price=current_price
+        symbol=symbol, timeframe=timeframe, current_price=current_price,
+        market_context=market_context, user_id=callback.from_user.id
     )
 
     await callback.answer()
@@ -849,7 +852,9 @@ async def show_scenario_detail(
     scenario_index: int,
     symbol: str = "",
     timeframe: str = "",
-    current_price: float = 0.0
+    current_price: float = 0.0,
+    market_context: Optional[dict] = None,
+    user_id: Optional[int] = None,
 ):
     """Показать детальную карточку сценария с графиком и EV метриками"""
 
@@ -862,6 +867,66 @@ async def show_scenario_detail(
     # Archetype
     archetype = scenario.get("primary_archetype", "")
     archetype_text = f" [{html.escape(str(archetype))}]" if archetype else ""
+
+    # === REAL EV GATE CHECK ===
+    real_ev_text = ""
+    is_blocked = False
+    gate_result = None
+
+    if archetype and timeframe:
+        try:
+            gate_checker = get_gate_checker()
+            # Формируем market_regime из trend + phase
+            regime = None
+            if market_context:
+                trend = market_context.get("trend")
+                phase = market_context.get("phase")
+                if trend and phase:
+                    regime = f"{trend}_{phase}"
+
+            gate_result = await gate_checker.check(
+                archetype=archetype,
+                timeframe=timeframe,
+                market_regime=regime,
+                symbol=symbol,
+                user_id=user_id,
+            )
+
+            # Формируем текст для UI
+            if gate_result.status == GateStatus.BLOCK:
+                is_blocked = True
+                stats = gate_result.stats
+                real_ev_text = f"\n🔴 <b>BLOCKED:</b> {html.escape(gate_result.message)}"
+                if stats:
+                    real_ev_text += f"\n   Real EV: {stats.real_ev:+.2f}R (n={stats.sample_size})"
+                real_ev_text += "\n"
+
+            elif gate_result.status == GateStatus.SOFT_BLOCK:
+                stats = gate_result.stats
+                real_ev_text = f"\n🟠 <b>Warning:</b> {html.escape(gate_result.message)}"
+                if stats:
+                    real_ev_text += f"\n   Real EV: {stats.real_ev:+.2f}R (n={stats.sample_size})"
+                real_ev_text += "\n"
+
+            elif gate_result.status == GateStatus.WARN:
+                stats = gate_result.stats
+                real_ev_text = f"\n🟡 <b>Real EV:</b> {stats.real_ev:+.2f}R (n={stats.sample_size})"
+                if stats.rolling_ev is not None:
+                    real_ev_text += f" | Rolling: {stats.rolling_ev:+.2f}R"
+                real_ev_text += "\n"
+
+            elif gate_result.status == GateStatus.ALLOWED and gate_result.stats:
+                stats = gate_result.stats
+                real_ev_text = f"\n✅ <b>Real EV:</b> {stats.real_ev:+.2f}R (n={stats.sample_size})"
+                if stats.rolling_ev is not None:
+                    real_ev_text += f" | Rolling: {stats.rolling_ev:+.2f}R"
+                real_ev_text += "\n"
+
+            elif gate_result.status == GateStatus.NO_DATA:
+                real_ev_text = "\n🔘 <b>Real EV:</b> <i>Недостаточно данных</i>\n"
+
+        except Exception as e:
+            logger.warning(f"Real EV gate check failed: {e}")
 
     # Entry Plan (ladder) или обычный Entry
     entry_plan = scenario.get("entry_plan")
@@ -976,7 +1041,7 @@ async def show_scenario_detail(
     card = f"""
 {bias_emoji} <b>{name}</b>{archetype_text}
 📊 Confidence: {confidence:.0f}%
-{ev_text}{probs_text}{class_text}
+{ev_text}{probs_text}{class_text}{real_ev_text}
 {entry_text}
 
 🛑 <b>Stop Loss:</b> ${sl_price:,.2f}
@@ -1004,7 +1069,10 @@ async def show_scenario_detail(
         for risk in risks[:2]:
             card += f"   • {html.escape(str(risk))}\n"
 
-    card += "\n💰 <b>Выбери риск для открытия:</b>"
+    if is_blocked:
+        card += "\n🚫 <b>Торговля заблокирована (Real EV)</b>"
+    else:
+        card += "\n💰 <b>Выбери риск для открытия:</b>"
 
     # Лимит caption для фото - 1024 символа
     CAPTION_LIMIT = 1024
@@ -1046,7 +1114,7 @@ async def show_scenario_detail(
             caption=card,
             parse_mode="HTML",
             reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(
-                scenario_index, show_chart_button=False
+                scenario_index, show_chart_button=False, is_blocked=is_blocked
             )
         )
     elif chart_png:
@@ -1057,7 +1125,7 @@ async def show_scenario_detail(
             card,
             parse_mode="HTML",
             reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(
-                scenario_index, show_chart_button=False
+                scenario_index, show_chart_button=False, is_blocked=is_blocked
             )
         )
     else:
@@ -1066,7 +1134,7 @@ async def show_scenario_detail(
             card,
             parse_mode="HTML",
             reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(
-                scenario_index, show_chart_button=True
+                scenario_index, show_chart_button=True, is_blocked=is_blocked
             )
         )
 
@@ -1251,13 +1319,15 @@ async def ai_custom_risk_cancel(callback: CallbackQuery, state: FSMContext):
     symbol = data.get("symbol", "")
     timeframe = data.get("timeframe", "")
     current_price = data.get("current_price", 0.0)
+    market_context = data.get("market_context")
 
     await state.set_state(AIScenarioStates.viewing_detail)
 
     # Показываем детали сценария с графиком
     await show_scenario_detail(
         callback.message, scenario, scenario_index,
-        symbol=symbol, timeframe=timeframe, current_price=current_price
+        symbol=symbol, timeframe=timeframe, current_price=current_price,
+        market_context=market_context, user_id=callback.from_user.id
     )
 
     await callback.answer("Отменено")
@@ -1964,11 +2034,10 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
         except Exception as log_error:
             logger.error(f"Failed to log trade entry: {log_error}")
 
-        # Установить Stop Loss
-        await bybit.set_trading_stop(
+        # Установить Stop Loss (update_trading_stop сохраняет существующий TP если есть)
+        await bybit.update_trading_stop(
             symbol=symbol,
-            stop_loss=str(stop_price),
-            sl_trigger_by="MarkPrice"
+            stop_loss=str(stop_price)
         )
 
         # ===== УСТАНОВИТЬ LADDER TAKE PROFIT =====
@@ -2382,6 +2451,7 @@ async def ai_change_risk_from_confirmation(callback: CallbackQuery, state: FSMCo
     symbol = data.get("symbol", "")
     timeframe = data.get("timeframe", "")
     current_price = data.get("current_price", 0.0)
+    market_context = data.get("market_context")
 
     await state.update_data(selected_scenario_index=scenario_index)
     await state.set_state(AIScenarioStates.viewing_detail)
@@ -2389,7 +2459,8 @@ async def ai_change_risk_from_confirmation(callback: CallbackQuery, state: FSMCo
     # Показать детали сценария с графиком
     await show_scenario_detail(
         callback.message, scenario, scenario_index,
-        symbol=symbol, timeframe=timeframe, current_price=current_price
+        symbol=symbol, timeframe=timeframe, current_price=current_price,
+        market_context=market_context, user_id=callback.from_user.id
     )
 
     await callback.answer()

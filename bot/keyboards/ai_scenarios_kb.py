@@ -93,7 +93,8 @@ def get_scenarios_keyboard(scenarios: List[Dict[str, Any]]) -> InlineKeyboardMar
 
 def get_scenario_detail_keyboard(
     scenario_index: int,
-    show_chart_button: bool = False
+    show_chart_button: bool = False,
+    is_blocked: bool = False,
 ) -> InlineKeyboardMarkup:
     """
     Клавиатура для детального просмотра сценария
@@ -101,6 +102,7 @@ def get_scenario_detail_keyboard(
     Args:
         scenario_index: Индекс сценария в списке
         show_chart_button: Показывать ли кнопку графика (если текст длинный)
+        is_blocked: Заблокирован ли сценарий по Real EV
 
     Returns:
         InlineKeyboardMarkup с действиями
@@ -112,6 +114,13 @@ def get_scenario_detail_keyboard(
     if show_chart_button:
         builder.button(text="📊 График", callback_data=f"ai:chart:{scenario_index}")
         rows.append(1)
+
+    # Если заблокировано - только кнопка назад
+    if is_blocked:
+        builder.button(text="🔙 К сценариям", callback_data="ai:back_to_list")
+        rows.append(1)
+        builder.adjust(*rows)
+        return builder.as_markup()
 
     # Выбор риска для quick trade
     builder.button(text="💰 Trade $5", callback_data=f"ai:trade:{scenario_index}:5")

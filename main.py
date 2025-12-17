@@ -11,6 +11,7 @@ import config
 from bot.handlers import start, menu, positions, settings, history
 from bot.handlers import trade_wizard, ai_scenarios, scenario_editor
 from bot.handlers import supervisor as supervisor_handler
+from bot.handlers import ev_stats
 from bot.middlewares.owner_check import OwnerCheckMiddleware
 from storage.user_settings import create_storage_instances
 from services.trade_logger import create_trade_logger
@@ -219,6 +220,7 @@ async def main():
     if config.AI_SCENARIOS_ENABLED:
         dp.include_router(ai_scenarios.router)
         dp.include_router(scenario_editor.router)
+        dp.include_router(ev_stats.router)
         logger.info("🤖 AI Scenarios enabled")
 
     dp.include_router(trade_wizard.router)

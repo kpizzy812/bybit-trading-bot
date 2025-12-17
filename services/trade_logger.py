@@ -95,6 +95,10 @@ class TradeRecord:
     mfe_usd: Optional[float] = None
     mfe_r: Optional[float] = None
 
+    # === REAL EV TRACKING ===
+    r_result: Optional[float] = None  # NET PnL в R (с учётом fees)
+    market_regime: Optional[str] = None  # "{trend}_{phase}" денормализация
+
     # === AI SCENARIO ===
     scenario_id: Optional[str] = None
     scenario_source: str = "manual"  # "syntra", "manual", "signal"
@@ -431,6 +435,18 @@ class TradeLogger:
         if target_trade.risk_usd and target_trade.risk_usd > 0:
             target_trade.rr_actual = target_trade.pnl_usd / target_trade.risk_usd
             target_trade.pnl_percent = (target_trade.pnl_usd / target_trade.risk_usd) * 100
+
+            # === REAL EV: r_result (NET PnL / risk) ===
+            pnl_net = target_trade.pnl_usd - (target_trade.total_fees_usd or 0) - (target_trade.funding_usd or 0)
+            target_trade.r_result = pnl_net / target_trade.risk_usd
+
+        # === REAL EV: market_regime из scenario_snapshot ===
+        if target_trade.scenario_snapshot and target_trade.market_regime is None:
+            ctx = target_trade.scenario_snapshot.get('market_context') or {}
+            trend = ctx.get('trend')
+            phase = ctx.get('phase')
+            if trend and phase:
+                target_trade.market_regime = f"{trend}_{phase}"
 
         # Определяем outcome
         if target_trade.pnl_usd > 0:

@@ -309,6 +309,28 @@ MIN_CONFIDENCE_THRESHOLD = float(os.getenv('MIN_CONFIDENCE_THRESHOLD', 0.5))
 
 
 # ============================================================
+# REAL EV TRACKING
+# ============================================================
+
+# Пороги для warning и disable
+EV_WARN_THRESHOLD = float(os.getenv('EV_WARN_THRESHOLD', 0.0))  # ниже нуля → warning
+EV_DISABLE_THRESHOLD = float(os.getenv('EV_DISABLE_THRESHOLD', -0.15))  # рубим
+
+# Минимум сделок для расчёта
+EV_MIN_TRADES_WARN = int(os.getenv('EV_MIN_TRADES_WARN', 10))
+EV_MIN_TRADES_DISABLE = int(os.getenv('EV_MIN_TRADES_DISABLE', 20))
+
+# Rolling safety check (последние N сделок)
+EV_ROLLING_LAST_N = int(os.getenv('EV_ROLLING_LAST_N', 10))
+EV_ROLLING_DISABLE_THRESHOLD = float(os.getenv('EV_ROLLING_DISABLE_THRESHOLD', -0.10))
+
+# Общие настройки
+EV_LOOKBACK_DAYS = int(os.getenv('EV_LOOKBACK_DAYS', 90))  # Период анализа
+EV_AUTO_DISABLE = os.getenv('EV_AUTO_DISABLE', 'true').lower() == 'true'  # Авто-отключение
+EV_SHOW_WARNING = os.getenv('EV_SHOW_WARNING', 'true').lower() == 'true'  # Показывать warning
+
+
+# ============================================================
 # CONFIG VALIDATION
 # ============================================================
 
