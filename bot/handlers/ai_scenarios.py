@@ -763,7 +763,7 @@ async def show_scenarios_list(
         confidence = scenario.get("confidence", 0) * 100
 
         # EV Grade если есть
-        ev_metrics = scenario.get("ev_metrics", {})
+        ev_metrics = scenario.get("ev_metrics") or {}
         ev_grade = ev_metrics.get("ev_grade", "")
         ev_r = ev_metrics.get("ev_r")
         ev_info = ""
@@ -915,7 +915,7 @@ async def show_scenario_detail(
     lev_max_safe = leverage_info.get("max_safe", "10x") if isinstance(leverage_info, dict) else f"{leverage_info}x"
 
     # === EV METRICS ===
-    ev_metrics = scenario.get("ev_metrics", {})
+    ev_metrics = scenario.get("ev_metrics") or {}
     ev_text = ""
     if ev_metrics:
         ev_r = ev_metrics.get("ev_r")
@@ -932,7 +932,7 @@ async def show_scenario_detail(
         ev_text += "\n"
 
     # === OUTCOME PROBS ===
-    outcome_probs = scenario.get("outcome_probs", {})
+    outcome_probs = scenario.get("outcome_probs") or {}
     probs_text = ""
     if outcome_probs and outcome_probs.get("source"):
         prob_sl = outcome_probs.get("sl", 0)
@@ -954,7 +954,7 @@ async def show_scenario_detail(
         probs_text += "\n"
 
     # === CLASS STATS / WARNING ===
-    class_stats = scenario.get("class_stats", {})
+    class_stats = scenario.get("class_stats") or {}
     class_warning = scenario.get("class_warning")
     class_text = ""
 
@@ -1013,7 +1013,7 @@ async def show_scenario_detail(
     chart_png = None
     if symbol and timeframe:
         try:
-            bybit = BybitClient(testnet=config.BYBIT_TESTNET)
+            bybit = BybitClient(testnet=config.DEFAULT_TESTNET_MODE)
             klines = await bybit.get_klines(
                 symbol=symbol,
                 interval=timeframe,
@@ -1092,7 +1092,7 @@ async def ai_show_chart(callback: CallbackQuery, state: FSMContext):
 
     try:
         # Получаем klines от Bybit
-        bybit = BybitClient(testnet=config.BYBIT_TESTNET)
+        bybit = BybitClient(testnet=config.DEFAULT_TESTNET_MODE)
         klines = await bybit.get_klines(
             symbol=symbol,
             interval=timeframe,
@@ -1682,10 +1682,10 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                 margin_usd = calculate_margin(p_avg, plan_qty, leverage)
                 entry_fee_estimate = calculate_fee(p_avg, plan_qty, is_taker=False)
 
-                # Extract EV metrics and class stats from scenario
-                ev_metrics = scenario.get("ev_metrics", {})
-                class_stats = scenario.get("class_stats", {})
-                outcome_probs = scenario.get("outcome_probs", {})
+                # Extract EV metrics and class stats from scenario (handle None values)
+                ev_metrics = scenario.get("ev_metrics") or {}
+                class_stats = scenario.get("class_stats") or {}
+                outcome_probs = scenario.get("outcome_probs") or {}
 
                 trade_record = TradeRecord(
                     trade_id=trade_id,
@@ -1914,10 +1914,10 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
             # Генерируем scenario_id для связки с AI
             scenario_uuid = str(uuid.uuid4())
 
-            # Extract EV metrics and class stats from scenario
-            ev_metrics = scenario.get("ev_metrics", {})
-            class_stats = scenario.get("class_stats", {})
-            outcome_probs = scenario.get("outcome_probs", {})
+            # Extract EV metrics and class stats from scenario (handle None values)
+            ev_metrics = scenario.get("ev_metrics") or {}
+            class_stats = scenario.get("class_stats") or {}
+            outcome_probs = scenario.get("outcome_probs") or {}
 
             trade_record = TradeRecord(
                 trade_id=trade_id,
