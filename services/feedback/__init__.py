@@ -44,6 +44,11 @@ from services.feedback.models import (
     ARCHETYPE_TAGS,
 )
 
+# Singleton instances
+from services.feedback.collector import feedback_collector
+from services.feedback.client import feedback_client
+from services.feedback.queue import feedback_queue
+
 __all__ = [
     # Enums
     "ExitReason",
@@ -66,4 +71,9 @@ __all__ = [
 
     # Constants
     "ARCHETYPE_TAGS",
+
+    # Singleton instances
+    "feedback_collector",
+    "feedback_client",
+    "feedback_queue",
 ]
