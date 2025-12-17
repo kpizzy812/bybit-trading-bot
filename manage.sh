@@ -56,7 +56,6 @@ do_sync() {
         --exclude '__pycache__/' \
         --exclude '*.pyc' \
         --exclude '.git/' \
-        --exclude '.env' \
         --exclude '*.log' \
         --exclude '.claude/' \
         --exclude 'storage/charts/' \
