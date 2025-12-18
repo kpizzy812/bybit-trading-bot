@@ -151,15 +151,7 @@ def get_dynamic_symbols_keyboard(
     )
     rows.append(1)
 
-    # Row 2: Current category label
-    category_label = CATEGORY_LABELS.get(current_category, "🌊 Trending")
-    builder.button(
-        text=category_label,
-        callback_data="ai:noop"  # Just a label, not clickable
-    )
-    rows.append(1)
-
-    # Row 3: Cached pairs (if any)
+    # Row 2: Cached pairs (if any)
     if cached_pairs:
         cached_count = 0
         for symbol, timeframe, age_mins in cached_pairs[:2]:  # Max 2 cached
@@ -218,20 +210,21 @@ def get_dynamic_symbols_keyboard(
         builder.button(text=coin, callback_data=f"ai:symbol:{symbol}")
     rows.append(4)
 
-    # Row 7: Category buttons (с короткими метками)
+    # Row 7: Category buttons (фильтры для динамического списка выше)
     categories = [
-        ("📊Pop", "popular"),
-        ("🔥Up", "pumping"),
-        ("🧊Down", "dumping"),
-        ("⚡Vol", "volatile"),
+        ("🌊", "trending"),
+        ("📊", "popular"),
+        ("🔥", "pumping"),
+        ("🧊", "dumping"),
+        ("⚡", "volatile"),
     ]
-    for label, cat in categories:
+    for emoji, cat in categories:
         is_current = "•" if cat == current_category else ""
         builder.button(
-            text=f"{is_current}{label}",
+            text=f"{is_current}{emoji}",
             callback_data=f"ai:cat:{cat}:{current_mode}"
         )
-    rows.append(4)
+    rows.append(5)
 
     # Row 8: Timeframes
     builder.button(text="⏰ 1H", callback_data="ai:timeframe:1h")
