@@ -257,16 +257,14 @@ async def ai_mode_selected(callback: CallbackQuery, state: FSMContext, settings_
 
 @router.callback_query(AIScenarioStates.choosing_symbol, F.data.startswith("ai:cat:"))
 async def ai_category_selected(callback: CallbackQuery, state: FSMContext):
-    """Переключение категории символов (Popular, Pumping, Dumping, Volatile)"""
+    """Открыть экран с топ-20 символами категории"""
     parts = callback.data.split(":")
     # ai:cat:pumping:standard
     category = parts[2]
     mode_id = parts[3] if len(parts) > 3 else "standard"
 
-    user_id = callback.from_user.id
-
     # Сохраняем категорию в state
-    await state.update_data(category=category)
+    await state.update_data(category=category, trading_mode=mode_id)
 
     # Получаем mode info
     registry = get_mode_registry()
@@ -274,26 +272,69 @@ async def ai_category_selected(callback: CallbackQuery, state: FSMContext):
 
     # Формируем текст с категорией
     category_labels = {
-        "trending": "🌊 Trending",
-        "popular": "📊 Popular (по объёму)",
-        "pumping": "🔥 Pumping (растут)",
-        "dumping": "🧊 Dumping (падают)",
-        "volatile": "⚡ Volatile (волатильные)",
+        "trending": "🌊 Trending (топ по комбо-скору)",
+        "popular": "📊 Popular (топ по объёму)",
+        "pumping": "🔥 Pumping (топ растущих)",
+        "dumping": "🧊 Dumping (топ падающих)",
+        "volatile": "⚡ Volatile (топ волатильных)",
     }
     category_label = category_labels.get(category, "🌊 Trending")
 
+    # Получаем символы из UniverseService
+    try:
+        universe_service = get_universe_service()
+        symbols = await universe_service.get_symbols_with_metrics(
+            mode=mode_id,
+            category=category,
+            limit=20
+        )
+    except Exception as e:
+        logger.warning(f"Universe service error: {e}")
+        symbols = []
+
+    if not symbols:
+        await callback.answer("❌ Нет данных для этой категории", show_alert=True)
+        return
+
     text = (
         f"🤖 <b>AI Trading Scenarios</b>\n"
-        f"{mode.emoji} Mode: <b>{mode.name}</b>\n"
-        f"{category_label}\n\n"
+        f"{mode.emoji} Mode: <b>{mode.name}</b>\n\n"
+        f"<b>{category_label}</b>\n"
+        f"Топ {len(symbols)} символов:\n\n"
+        "Выбери символ для анализа:"
+    )
+
+    keyboard = ai_scenarios_kb.get_category_symbols_keyboard(symbols, category, mode_id)
+
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(AIScenarioStates.choosing_symbol, F.data == "ai:symbols")
+async def ai_back_to_symbols(callback: CallbackQuery, state: FSMContext, settings_storage):
+    """Вернуться на главный экран выбора символа"""
+    user_id = callback.from_user.id
+
+    # Получить текущий mode из state или settings
+    data = await state.get_data()
+    current_mode = data.get("trading_mode")
+    if not current_mode:
+        settings = await settings_storage.get_settings(user_id)
+        current_mode = settings.default_trading_mode
+
+    registry = get_mode_registry()
+    mode = registry.get_or_default(current_mode)
+
+    text = (
+        f"🤖 <b>AI Trading Scenarios</b>\n"
+        f"{mode.emoji} Mode: <b>{mode.name}</b>\n\n"
         "📊 Выбери символ и таймфрейм для анализа:"
     )
 
-    # Получить клавиатуру с новой категорией
-    keyboard = await _get_symbols_keyboard(user_id, mode_id, category)
+    keyboard = await _get_symbols_keyboard(user_id, current_mode, "trending")
 
     await callback.message.edit_text(text, reply_markup=keyboard)
-    await callback.answer(category_label)
+    await callback.answer()
 
 
 @router.callback_query(F.data == "ai:noop")
