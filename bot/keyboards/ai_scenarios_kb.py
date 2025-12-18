@@ -173,10 +173,17 @@ def get_dynamic_symbols_keyboard(
         if cached_count > 0:
             rows.append(cached_count)
 
-    # Row 4-5: Dynamic symbols from Universe (3-5 symbols)
+    # Row 4-5: Dynamic symbols from Universe (исключая majors)
+    majors_set = set(MAJOR_SYMBOLS)
     if dynamic_symbols:
         dynamic_row = []
-        for m in dynamic_symbols[:5]:  # Max 5 dynamic symbols
+        for m in dynamic_symbols:
+            # Пропускаем majors - они уже есть ниже
+            if m.symbol in majors_set:
+                continue
+            if len(dynamic_row) >= 5:
+                break
+
             coin = m.symbol.replace("USDT", "")
             # Show price change for pumping/dumping
             if current_category in ("pumping", "gainers"):
@@ -211,17 +218,17 @@ def get_dynamic_symbols_keyboard(
         builder.button(text=coin, callback_data=f"ai:symbol:{symbol}")
     rows.append(4)
 
-    # Row 7: Category buttons
+    # Row 7: Category buttons (с короткими метками)
     categories = [
-        ("📊", "popular"),
-        ("🔥", "pumping"),
-        ("🧊", "dumping"),
-        ("⚡", "volatile"),
+        ("📊Pop", "popular"),
+        ("🔥Up", "pumping"),
+        ("🧊Down", "dumping"),
+        ("⚡Vol", "volatile"),
     ]
-    for emoji, cat in categories:
+    for label, cat in categories:
         is_current = "•" if cat == current_category else ""
         builder.button(
-            text=f"{is_current}{emoji}",
+            text=f"{is_current}{label}",
             callback_data=f"ai:cat:{cat}:{current_mode}"
         )
     rows.append(4)
