@@ -54,7 +54,6 @@ async def _get_symbols_keyboard(
     user_id: int,
     current_mode: str,
     current_category: str = "trending",
-    bybit_client: BybitClient = None,
 ):
     """
     Хелпер для получения клавиатуры символов.
@@ -73,6 +72,8 @@ async def _get_symbols_keyboard(
 
     # Попробовать получить динамические символы
     try:
+        # Создаём bybit client для Universe
+        bybit_client = BybitClient(testnet=config.DEFAULT_TESTNET_MODE)
         universe_service = get_universe_service(bybit_client)
         dynamic_symbols = await universe_service.get_symbols_with_metrics(
             mode=current_mode,
@@ -282,7 +283,8 @@ async def ai_category_selected(callback: CallbackQuery, state: FSMContext):
 
     # Получаем символы из UniverseService
     try:
-        universe_service = get_universe_service()
+        bybit_client = BybitClient(testnet=config.DEFAULT_TESTNET_MODE)
+        universe_service = get_universe_service(bybit_client)
         symbols = await universe_service.get_symbols_with_metrics(
             mode=mode_id,
             category=category,
