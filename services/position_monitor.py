@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from services.breakeven_manager import BreakevenManager
     from services.post_sl_analyzer import PostSLAnalyzer
     from services.supervisor_client import SupervisorClient
+    from services.trade_logger import TradeRecord
 
 # Feedback integration
 from services.feedback import feedback_collector, feedback_client, feedback_queue
@@ -283,9 +284,7 @@ class PositionMonitor(BaseMonitor):
     async def _handle_position_closed(self, user_id: int, snapshot: PositionSnapshot):
         """Обработка полного закрытия позиции"""
 
-        # Определяем причину закрытия
         exit_price = snapshot.mark_price
-        reason = self._determine_close_reason(snapshot, exit_price)
 
         # Рассчитываем метрики
         pnl_usd = snapshot.unrealized_pnl
@@ -296,13 +295,16 @@ class PositionMonitor(BaseMonitor):
         if position_value > 0:
             roe_percent = (pnl_usd / position_value) * float(snapshot.leverage) * 100
 
-        # Находим trade_id по символу
+        # Находим trade по символу (нужен для определения причины закрытия)
         trade = await self.trade_logger.get_open_trade_by_symbol(
             user_id=user_id,
             symbol=snapshot.symbol,
             testnet=self.testnet
         )
         trade_id = trade.trade_id if trade else None
+
+        # Определяем причину закрытия (с fallback к TradeRecord)
+        reason = self._determine_close_reason(snapshot, exit_price, trade)
 
         # Логируем в TradeLogger
         if trade_id:
@@ -448,36 +450,56 @@ class PositionMonitor(BaseMonitor):
 
         logger.info(f"Partial close for user {user_id}: {old_snapshot.symbol} {percent_closed:.1f}% PnL: ${partial_pnl:+.2f}")
 
-    def _determine_close_reason(self, snapshot: PositionSnapshot, exit_price: float) -> str:
-        """Определить причину закрытия позиции"""
+    def _determine_close_reason(
+        self,
+        snapshot: PositionSnapshot,
+        exit_price: float,
+        trade: Optional['TradeRecord'] = None
+    ) -> str:
+        """Определить причину закрытия позиции.
 
-        # Проверяем близость к Stop Loss
+        Сначала проверяет данные из snapshot (актуальные ордера Bybit),
+        затем fallback к TradeRecord (запланированные цены).
+        """
+        # Собираем SL цену (snapshot имеет приоритет, но может быть пустым после срабатывания)
+        sl_price = None
         if snapshot.stop_loss and snapshot.stop_loss != '':
             try:
                 sl_price = float(snapshot.stop_loss)
-                # Если цена в пределах 0.1% от SL (учёт проскальзывания маркет-ордера)
-                tolerance = sl_price * 0.001  # 0.1% вместо 1%
-                if abs(exit_price - sl_price) <= tolerance:
-                    return "Stop Loss"
             except (ValueError, TypeError):
                 pass
+        # Fallback к TradeRecord если snapshot пустой
+        if sl_price is None and trade and trade.stop_price:
+            sl_price = trade.stop_price
 
-        # Проверяем близость к Take Profit
+        # Собираем TP цену
+        tp_price = None
         if snapshot.take_profit and snapshot.take_profit != '':
             try:
                 tp_price = float(snapshot.take_profit)
-                # Если цена в пределах 0.1% от TP
-                tolerance = tp_price * 0.001  # 0.1% вместо 1%
-                if abs(exit_price - tp_price) <= tolerance:
-                    return "Take Profit"
             except (ValueError, TypeError):
                 pass
+        # Fallback к TradeRecord
+        if tp_price is None and trade and trade.tp_price:
+            tp_price = trade.tp_price
+
+        # Проверяем близость к Stop Loss (увеличенный tolerance для market ордеров)
+        if sl_price:
+            tolerance = sl_price * 0.005  # 0.5% для учёта проскальзывания маркет-ордера
+            if abs(exit_price - sl_price) <= tolerance:
+                return "Stop Loss"
+
+        # Проверяем близость к Take Profit
+        if tp_price:
+            tolerance = tp_price * 0.005  # 0.5% tolerance
+            if abs(exit_price - tp_price) <= tolerance:
+                return "Take Profit"
 
         # Проверяем ликвидацию
         if snapshot.liq_price and snapshot.liq_price != '':
             try:
                 liq = float(snapshot.liq_price)
-                tolerance = liq * 0.001  # 0.1% вместо 1%
+                tolerance = liq * 0.005  # 0.5% tolerance
                 if abs(exit_price - liq) <= tolerance:
                     return "Liquidation"
             except (ValueError, TypeError):
