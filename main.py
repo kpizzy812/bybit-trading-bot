@@ -17,7 +17,7 @@ from storage.user_settings import create_storage_instances
 from services.trade_logger import create_trade_logger
 from services.position_monitor import create_position_monitor
 from services.order_monitor import create_order_monitor
-from services.entry_plan_monitor import create_entry_plan_monitor
+from services.entry_plan import create_entry_plan_monitor
 from services.breakeven_manager import create_breakeven_manager
 from services.post_sl_analyzer import create_post_sl_analyzer
 from services.supervisor_client import get_supervisor_client
