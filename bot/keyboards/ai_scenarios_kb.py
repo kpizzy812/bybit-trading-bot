@@ -209,15 +209,15 @@ def get_category_symbols_keyboard(
     builder = InlineKeyboardBuilder()
     rows = []
 
-    # Символы (до 20 штук, по 5 в ряд) - только тикер
+    # Символы (до 20 штук, по 3 в ряд) - только тикер
     row_count = 0
     for m in symbols[:20]:
         coin = m.symbol.replace("USDT", "")
         builder.button(text=coin, callback_data=f"ai:symbol:{m.symbol}")
         row_count += 1
 
-        if row_count == 5:
-            rows.append(5)
+        if row_count == 3:
+            rows.append(3)
             row_count = 0
 
     # Добавить остаток
