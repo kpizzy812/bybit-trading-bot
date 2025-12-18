@@ -35,6 +35,7 @@ from services.scenarios_cache import get_scenarios_cache
 from services.charts import get_chart_generator
 from services.real_ev import get_gate_checker, GateStatus
 from services.trading_modes import get_mode_registry, MEME_SYMBOLS
+from services.trading_modes.safety_checker import get_safety_checker, SafetyCheckResult
 from utils.validators import round_qty, round_price
 
 # Импорт утилит
@@ -1365,6 +1366,36 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 
         settings = await settings_storage.get_settings(user_id)
         testnet_mode = settings.testnet_mode
+
+        # === 🆕 SAFETY CAPS CHECK ===
+        trading_mode = data.get("trading_mode", settings.default_trading_mode or "standard")
+        safety_checker = get_safety_checker(trade_logger)
+        safety_result = await safety_checker.check_can_trade(
+            user_id=user_id,
+            mode_id=trading_mode,
+            risk_usd=risk_usd
+        )
+
+        if not safety_result.allowed:
+            await lock_manager.release_lock(user_id)
+            cooldown_text = ""
+            if safety_result.cooldown_remaining_min:
+                cooldown_text = f"\n⏳ Cooldown: {safety_result.cooldown_remaining_min} мин"
+
+            await callback.message.edit_text(
+                f"⛔️ <b>Safety Limit Reached</b>\n\n"
+                f"<b>Причина:</b> {safety_result.reason}\n"
+                f"{cooldown_text}\n\n"
+                f"📊 Сегодня: {safety_result.trades_today} сделок, "
+                f"{safety_result.losses_today} убытков "
+                f"(${safety_result.loss_today_usd:.2f})\n"
+                f"🔄 Подряд убытков: {safety_result.consecutive_losses}\n\n"
+                f"<i>Это ограничение режима {trading_mode.upper()} для защиты от овертрейдинга.</i>",
+                reply_markup=None
+            )
+            await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
+            await state.clear()
+            return
 
         # === ПРОВЕРКА ЛИМИТА ПОЗИЦИЙ ===
         bybit = BybitClient(testnet=testnet_mode)
