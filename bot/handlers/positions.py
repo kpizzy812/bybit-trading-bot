@@ -4,10 +4,12 @@
 import html
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, BufferedInputFile
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
+import config
+from services.charts import get_chart_generator
 from bot.keyboards.positions_kb import (
     get_positions_list_kb,
     get_positions_with_plans_kb,
@@ -117,7 +119,7 @@ async def refresh_positions(callback: CallbackQuery, settings_storage, entry_pla
 
 @router.callback_query(F.data.startswith("pos_detail:"))
 async def show_position_detail(callback: CallbackQuery, settings_storage):
-    """Показать детали конкретной позиции"""
+    """Показать детали конкретной позиции с графиком"""
     await callback.answer()
 
     # Парсим symbol из callback data
@@ -144,13 +146,16 @@ async def show_position_detail(callback: CallbackQuery, settings_storage):
         try:
             all_orders = await client.get_open_orders(symbol=symbol)
             for o in all_orders:
-                # Ladder TP ордера: reduce_only + цена в нужном направлении
-                if o.get('reduceOnly', False):
+                order_type = o.get('orderType', '')
+                price = float(o.get('price', 0))
+
+                if (o.get('reduceOnly', False) and
+                    order_type == 'Limit' and
+                    price > 0):
                     tp_orders.append({
-                        'price': float(o.get('price', 0)),
+                        'price': price,
                         'qty': o.get('qty', '0')
                     })
-            # Сортируем по цене
             tp_orders.sort(key=lambda x: x['price'])
         except Exception as e:
             logger.warning(f"Error fetching TP orders: {e}")
@@ -158,14 +163,39 @@ async def show_position_detail(callback: CallbackQuery, settings_storage):
         # Формируем детальную информацию
         text = await _format_position_detail(position, tp_orders=tp_orders)
 
-        await callback.message.edit_text(
-            text,
-            reply_markup=get_position_detail_kb(symbol)
-        )
+        # Генерируем график
+        chart_png = await _generate_position_chart(client, position, tp_orders)
+
+        # Удаляем старое сообщение и отправляем новое с фото
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+        if chart_png:
+            photo = BufferedInputFile(chart_png, filename=f"{symbol}_position.png")
+            await callback.message.answer_photo(
+                photo=photo,
+                caption=text if len(text) <= 1024 else None,
+                parse_mode="HTML",
+                reply_markup=get_position_detail_kb(symbol)
+            )
+            if len(text) > 1024:
+                await callback.message.answer(
+                    text,
+                    parse_mode="HTML",
+                    reply_markup=get_position_detail_kb(symbol)
+                )
+        else:
+            await callback.message.answer(
+                text,
+                parse_mode="HTML",
+                reply_markup=get_position_detail_kb(symbol)
+            )
 
     except Exception as e:
         logger.error(f"Error showing position detail: {e}")
-        await callback.message.edit_text(
+        await callback.message.answer(
             f"❌ Ошибка при получении позиции:\n{html.escape(str(e))}"
         )
 
@@ -709,8 +739,8 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage, entr
 # ============================================================
 
 @router.callback_query(F.data.startswith("eplan_detail:"))
-async def show_entry_plan_detail(callback: CallbackQuery, entry_plan_monitor):
-    """Показать детали Entry Plan"""
+async def show_entry_plan_detail(callback: CallbackQuery, entry_plan_monitor, settings_storage):
+    """Показать детали Entry Plan с графиком"""
     await callback.answer()
 
     # Парсим plan_id (короткий, 8 символов)
@@ -732,10 +762,39 @@ async def show_entry_plan_detail(callback: CallbackQuery, entry_plan_monitor):
     # Форматируем детали плана
     text = _format_entry_plan_detail(plan)
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=get_entry_plan_detail_kb(plan.plan_id, is_activated=plan.is_activated)
-    )
+    # Генерируем график
+    user_id = callback.from_user.id
+    user_settings = await settings_storage.get_settings(user_id)
+    testnet = user_settings.testnet_mode
+
+    chart_png = await _generate_entry_plan_chart(plan, testnet)
+
+    # Удаляем старое сообщение и отправляем новое
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
+    if chart_png:
+        photo = BufferedInputFile(chart_png, filename=f"{plan.symbol}_entryplan.png")
+        await callback.message.answer_photo(
+            photo=photo,
+            caption=text if len(text) <= 1024 else None,
+            parse_mode="HTML",
+            reply_markup=get_entry_plan_detail_kb(plan.plan_id, is_activated=plan.is_activated)
+        )
+        if len(text) > 1024:
+            await callback.message.answer(
+                text,
+                parse_mode="HTML",
+                reply_markup=get_entry_plan_detail_kb(plan.plan_id, is_activated=plan.is_activated)
+            )
+    else:
+        await callback.message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=get_entry_plan_detail_kb(plan.plan_id, is_activated=plan.is_activated)
+        )
 
 
 @router.callback_query(F.data.startswith("eplan_activate:"))
@@ -1155,3 +1214,157 @@ SL: {stop_loss if stop_loss else '❌ Not Set'}
     text += "\n💡 Выбери действие ниже:"
 
     return text.strip()
+
+
+async def _generate_position_chart(
+    client: BybitClient,
+    position: dict,
+    tp_orders: list = None,
+    timeframe: str = "1h"
+) -> bytes | None:
+    """
+    Генерация графика для позиции.
+
+    Args:
+        client: Bybit client
+        position: Данные позиции
+        tp_orders: Список TP ордеров
+        timeframe: Таймфрейм для свечей
+
+    Returns:
+        PNG bytes или None при ошибке
+    """
+    try:
+        symbol = position.get('symbol')
+        entry_price = float(position.get('avgPrice', 0))
+        mark_price = float(position.get('markPrice', 0))
+        stop_loss_raw = position.get('stopLoss', '')
+        side = position.get('side')  # Buy или Sell
+
+        # Получаем klines
+        klines = await client.get_klines(symbol=symbol, interval=timeframe, limit=100)
+        if not klines:
+            logger.warning(f"No klines for {symbol}")
+            return None
+
+        # Строим scenario-подобный dict для ChartGenerator
+        # Entry zone (single price for position)
+        scenario = {
+            "entry": {
+                "price_min": entry_price,
+                "price_max": entry_price
+            },
+            "stop_loss": {},
+            "targets": [],
+            "bias": "long" if side == "Buy" else "short"
+        }
+
+        # Stop loss
+        if stop_loss_raw:
+            try:
+                sl_price = float(stop_loss_raw)
+                scenario["stop_loss"]["recommended"] = sl_price
+            except (ValueError, TypeError):
+                pass
+
+        # Take profit levels
+        if tp_orders:
+            for i, tp in enumerate(tp_orders[:3]):  # Макс 3 TP
+                scenario["targets"].append({
+                    "price": tp['price'],
+                    "partial_close_pct": 100 // len(tp_orders)  # Примерно
+                })
+
+        # Генерируем график
+        chart_gen = get_chart_generator()
+        chart_png = chart_gen.generate_scenario_chart(
+            klines=klines,
+            scenario=scenario,
+            symbol=symbol,
+            timeframe=timeframe,
+            current_price=mark_price
+        )
+
+        return chart_png
+
+    except Exception as e:
+        logger.warning(f"Chart generation failed for position: {e}")
+        return None
+
+
+async def _generate_entry_plan_chart(
+    plan,
+    testnet: bool,
+    timeframe: str = "1h"
+) -> bytes | None:
+    """
+    Генерация графика для Entry Plan.
+
+    Args:
+        plan: EntryPlan объект
+        testnet: Режим testnet
+        timeframe: Таймфрейм для свечей
+
+    Returns:
+        PNG bytes или None при ошибке
+    """
+    try:
+        symbol = plan.symbol
+
+        # Создаём клиент
+        client = BybitClient(testnet=testnet)
+
+        # Получаем текущую цену
+        ticker = await client.get_tickers(symbol)
+        current_price = float(ticker.get('lastPrice', 0))
+
+        # Получаем klines
+        klines = await client.get_klines(symbol=symbol, interval=timeframe, limit=100)
+        if not klines:
+            logger.warning(f"No klines for {symbol}")
+            return None
+
+        # Считаем entry zone из ордеров
+        order_prices = [o.get('price', 0) for o in plan.orders if o.get('price', 0) > 0]
+        if order_prices:
+            entry_min = min(order_prices)
+            entry_max = max(order_prices)
+        else:
+            entry_min = entry_max = plan.avg_entry_price or current_price
+
+        # Строим scenario
+        scenario = {
+            "entry": {
+                "price_min": entry_min,
+                "price_max": entry_max
+            },
+            "stop_loss": {
+                "recommended": plan.stop_price
+            },
+            "targets": [],
+            "bias": "long" if plan.side == "Long" else "short"
+        }
+
+        # Take profit levels
+        if plan.targets:
+            for t in plan.targets[:3]:
+                scenario["targets"].append({
+                    "price": t.get('price', 0),
+                    "partial_close_pct": t.get('partial_close_pct', 100)
+                })
+
+        # Генерируем график
+        chart_gen = get_chart_generator()
+        chart_png = chart_gen.generate_scenario_chart(
+            klines=klines,
+            scenario=scenario,
+            symbol=symbol,
+            timeframe=timeframe,
+            current_price=current_price
+        )
+
+        return chart_png
+
+    except Exception as e:
+        logger.warning(f"Chart generation failed for entry plan: {e}")
+        return None

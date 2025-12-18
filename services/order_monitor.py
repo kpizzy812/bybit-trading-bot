@@ -220,10 +220,9 @@ class OrderMonitor:
             # 2. Установить Stop Loss (если не был уже установлен на ордере)
             client = self._get_client(order.testnet)
             if not order.sl_already_set:
-                await client.set_trading_stop(
+                await client.update_trading_stop(
                     symbol=order.symbol,
-                    stop_loss=str(order.stop_price),
-                    sl_trigger_by="MarkPrice"
+                    stop_loss=str(order.stop_price)
                 )
                 logger.info(f"SL set at ${order.stop_price:.2f} for {order.symbol}")
             else:

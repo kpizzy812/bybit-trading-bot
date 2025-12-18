@@ -938,10 +938,9 @@ class EntryPlanMonitor:
             client = self._get_client(plan.testnet)
             trigger_type = "LastPrice" if plan.testnet else "MarkPrice"
 
-            await client.set_trading_stop(
+            await client.update_trading_stop(
                 symbol=plan.symbol,
-                stop_loss=str(plan.stop_price),
-                sl_trigger_by=trigger_type
+                stop_loss=str(plan.stop_price)
             )
 
             plan.sl_set = True
@@ -1062,10 +1061,9 @@ class EntryPlanMonitor:
 
             # SL (если ещё не установлен)
             if not plan.sl_set:
-                await client.set_trading_stop(
+                await client.update_trading_stop(
                     symbol=plan.symbol,
-                    stop_loss=str(plan.stop_price),
-                    sl_trigger_by="MarkPrice" if not plan.testnet else "LastPrice"
+                    stop_loss=str(plan.stop_price)
                 )
                 plan.sl_set = True
                 logger.info(f"SL set at ${plan.stop_price:.2f} for {plan.symbol}")
@@ -1094,10 +1092,9 @@ class EntryPlanMonitor:
 
             # SL (если ещё не установлен)
             if not plan.sl_set:
-                await client.set_trading_stop(
+                await client.update_trading_stop(
                     symbol=plan.symbol,
-                    stop_loss=str(plan.stop_price),
-                    sl_trigger_by="MarkPrice" if not plan.testnet else "LastPrice"
+                    stop_loss=str(plan.stop_price)
                 )
                 plan.sl_set = True
                 logger.info(f"SL set at ${plan.stop_price:.2f} for partial position")

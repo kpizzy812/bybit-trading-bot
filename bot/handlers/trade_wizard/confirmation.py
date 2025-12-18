@@ -290,20 +290,28 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
                 # Single TP - цена указана пользователем
                 tp_price = data.get('tp_price')
 
-                # ✅ АТОМАРНО: один вызов для SL + TP
-                try:
-                    await bybit.set_trading_stop(
-                        symbol=symbol,
-                        stop_loss=str(stop_price),
-                        take_profit=str(tp_price),
-                        sl_trigger_by="MarkPrice",
-                        tp_trigger_by="MarkPrice"
-                    )
-                    logger.info(f"SL/TP set: SL=${stop_price:.4f}, TP=${tp_price:.4f}")
+                # ✅ АТОМАРНО: один вызов для SL + TP с retry
+                sl_tp_set = False
+                last_error = None
+                for attempt in range(3):  # 3 попытки
+                    try:
+                        await bybit.update_trading_stop(
+                            symbol=symbol,
+                            stop_loss=str(stop_price),
+                            take_profit=str(tp_price)
+                        )
+                        logger.info(f"SL/TP set: SL=${stop_price:.4f}, TP=${tp_price:.4f}")
+                        sl_tp_set = True
+                        break
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(f"SL/TP attempt {attempt + 1}/3 failed: {e}")
+                        if attempt < 2:
+                            await asyncio.sleep(1)
 
-                except Exception as sl_tp_error:
-                    # PANIC! SL/TP не установились - закрываем позицию
-                    logger.error(f"CRITICAL: Failed to set SL/TP: {sl_tp_error}")
+                if not sl_tp_set:
+                    # После 3 попыток - закрываем позицию
+                    logger.error(f"CRITICAL: Failed to set SL/TP after 3 attempts: {last_error}")
 
                     try:
                         await bybit.close_position(symbol)
@@ -313,9 +321,9 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
 
                     await callback.message.edit_text(
                         f"❌ <b>Критическая ошибка!</b>\n\n"
-                        f"Не удалось установить Stop Loss / Take Profit.\n"
+                        f"Не удалось установить Stop Loss / Take Profit (3 попытки).\n"
                         f"Позиция была экстренно закрыта.\n\n"
-                        f"Ошибка: {str(sl_tp_error)}",
+                        f"Ошибка: {str(last_error)}",
                         reply_markup=None
                     )
                     await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
@@ -333,20 +341,28 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
                 # Округлить до tickSize
                 tp_price_str = round_price(tp_price, instrument_info['tickSize'])
 
-                # ✅ АТОМАРНО: один вызов для SL + TP
-                try:
-                    await bybit.set_trading_stop(
-                        symbol=symbol,
-                        stop_loss=str(stop_price),
-                        take_profit=tp_price_str,
-                        sl_trigger_by="MarkPrice",
-                        tp_trigger_by="MarkPrice"
-                    )
-                    logger.info(f"SL/TP set: SL=${stop_price:.4f}, TP=${tp_price_str} (RR {tp_rr})")
+                # ✅ АТОМАРНО: один вызов для SL + TP с retry
+                sl_tp_set = False
+                last_error = None
+                for attempt in range(3):  # 3 попытки
+                    try:
+                        await bybit.update_trading_stop(
+                            symbol=symbol,
+                            stop_loss=str(stop_price),
+                            take_profit=tp_price_str
+                        )
+                        logger.info(f"SL/TP set: SL=${stop_price:.4f}, TP=${tp_price_str} (RR {tp_rr})")
+                        sl_tp_set = True
+                        break
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(f"SL/TP attempt {attempt + 1}/3 failed: {e}")
+                        if attempt < 2:
+                            await asyncio.sleep(1)
 
-                except Exception as sl_tp_error:
-                    # PANIC! SL/TP не установились - закрываем позицию
-                    logger.error(f"CRITICAL: Failed to set SL/TP: {sl_tp_error}")
+                if not sl_tp_set:
+                    # После 3 попыток - закрываем позицию
+                    logger.error(f"CRITICAL: Failed to set SL/TP after 3 attempts: {last_error}")
 
                     try:
                         await bybit.close_position(symbol)
@@ -356,9 +372,9 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
 
                     await callback.message.edit_text(
                         f"❌ <b>Критическая ошибка!</b>\n\n"
-                        f"Не удалось установить Stop Loss / Take Profit.\n"
+                        f"Не удалось установить Stop Loss / Take Profit (3 попытки).\n"
                         f"Позиция была экстренно закрыта.\n\n"
-                        f"Ошибка: {str(sl_tp_error)}",
+                        f"Ошибка: {str(last_error)}",
                         reply_markup=None
                     )
                     await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
@@ -366,18 +382,27 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
 
             elif tp_mode == "ladder":
                 # Ladder TP - два уровня
-                # ✅ СНАЧАЛА: Установить SL на позицию (КРИТИЧНО!)
-                try:
-                    await bybit.set_trading_stop(
-                        symbol=symbol,
-                        stop_loss=str(stop_price),
-                        sl_trigger_by="MarkPrice"
-                    )
-                    logger.info(f"Stop Loss set at ${stop_price:.4f}")
+                # ✅ СНАЧАЛА: Установить SL на позицию с retry (КРИТИЧНО!)
+                sl_set = False
+                last_error = None
+                for attempt in range(3):  # 3 попытки
+                    try:
+                        await bybit.update_trading_stop(
+                            symbol=symbol,
+                            stop_loss=str(stop_price)
+                        )
+                        logger.info(f"Stop Loss set at ${stop_price:.4f}")
+                        sl_set = True
+                        break
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(f"SL attempt {attempt + 1}/3 failed: {e}")
+                        if attempt < 2:
+                            await asyncio.sleep(1)
 
-                except Exception as sl_error:
-                    # PANIC! SL не установился - закрываем позицию
-                    logger.error(f"CRITICAL: Failed to set SL for ladder: {sl_error}")
+                if not sl_set:
+                    # После 3 попыток - закрываем позицию
+                    logger.error(f"CRITICAL: Failed to set SL for ladder after 3 attempts: {last_error}")
 
                     try:
                         await bybit.close_position(symbol)
@@ -387,9 +412,9 @@ async def trade_confirm(callback: CallbackQuery, state: FSMContext, settings_sto
 
                     await callback.message.edit_text(
                         f"❌ <b>Критическая ошибка!</b>\n\n"
-                        f"Не удалось установить Stop Loss.\n"
+                        f"Не удалось установить Stop Loss (3 попытки).\n"
                         f"Позиция была экстренно закрыта.\n\n"
-                        f"Ошибка: {str(sl_error)}",
+                        f"Ошибка: {str(last_error)}",
                         reply_markup=None
                     )
                     await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())

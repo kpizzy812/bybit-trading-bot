@@ -477,8 +477,8 @@ class PositionMonitor:
         if snapshot.stop_loss and snapshot.stop_loss != '':
             try:
                 sl_price = float(snapshot.stop_loss)
-                # Если цена в пределах 1% от SL (учёт проскальзывания маркет-ордера)
-                tolerance = sl_price * 0.01
+                # Если цена в пределах 0.1% от SL (учёт проскальзывания маркет-ордера)
+                tolerance = sl_price * 0.001  # 0.1% вместо 1%
                 if abs(exit_price - sl_price) <= tolerance:
                     return "Stop Loss"
             except (ValueError, TypeError):
@@ -488,8 +488,8 @@ class PositionMonitor:
         if snapshot.take_profit and snapshot.take_profit != '':
             try:
                 tp_price = float(snapshot.take_profit)
-                # Если цена в пределах 1% от TP
-                tolerance = tp_price * 0.01
+                # Если цена в пределах 0.1% от TP
+                tolerance = tp_price * 0.001  # 0.1% вместо 1%
                 if abs(exit_price - tp_price) <= tolerance:
                     return "Take Profit"
             except (ValueError, TypeError):
@@ -499,7 +499,7 @@ class PositionMonitor:
         if snapshot.liq_price and snapshot.liq_price != '':
             try:
                 liq = float(snapshot.liq_price)
-                tolerance = liq * 0.01
+                tolerance = liq * 0.001  # 0.1% вместо 1%
                 if abs(exit_price - liq) <= tolerance:
                     return "Liquidation"
             except (ValueError, TypeError):

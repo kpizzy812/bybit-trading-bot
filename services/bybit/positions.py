@@ -96,36 +96,76 @@ class PositionsMixin:
             logger.error(f"Error getting positions: {e}")
             raise BybitError(f"Failed to get positions: {str(e)}")
 
-    async def close_position(self, symbol: str):
-        """Закрыть позицию Market ордером"""
-        try:
-            # Получаем позицию
-            positions = await self.get_positions(symbol=symbol)
+    async def close_position(self, symbol: str, verify: bool = True, max_retries: int = 2):
+        """
+        Закрыть позицию Market ордером с верификацией
 
-            if not positions:
-                raise BybitError(f"No open position for {symbol}")
+        Args:
+            symbol: Торговая пара
+            verify: Проверять ли что позиция действительно закрылась
+            max_retries: Максимальное количество попыток при неудаче
+        """
+        import asyncio
 
-            position = positions[0]
-            size = position.get('size')
-            side = position.get('side')  # "Buy" or "Sell"
+        for attempt in range(max_retries + 1):
+            try:
+                # Получаем позицию
+                positions = await self.get_positions(symbol=symbol)
 
-            # Противоположная сторона для закрытия
-            close_side = "Sell" if side == "Buy" else "Buy"
+                if not positions:
+                    if attempt > 0:
+                        # Позиция закрылась после предыдущей попытки
+                        logger.info(f"Position for {symbol} confirmed closed")
+                        return
+                    raise BybitError(f"No open position for {symbol}")
 
-            # Закрываем Market ордером
-            await self.place_order(
-                symbol=symbol,
-                side=close_side,
-                order_type="Market",
-                qty=size,
-                reduce_only=True
-            )
+                position = positions[0]
+                size = position.get('size')
+                side = position.get('side')  # "Buy" or "Sell"
 
-            logger.info(f"Position closed for {symbol}")
+                # Противоположная сторона для закрытия
+                close_side = "Sell" if side == "Buy" else "Buy"
 
-        except Exception as e:
-            logger.error(f"Error closing position: {e}")
-            raise BybitError(f"Failed to close position: {str(e)}")
+                # Закрываем Market ордером
+                await self.place_order(
+                    symbol=symbol,
+                    side=close_side,
+                    order_type="Market",
+                    qty=size,
+                    reduce_only=True
+                )
+
+                # Верификация: проверяем что позиция действительно закрылась
+                if verify:
+                    await asyncio.sleep(1)  # Даём время на обработку
+                    updated_positions = await self.get_positions(symbol=symbol)
+
+                    if updated_positions and float(updated_positions[0].get('size', 0)) > 0:
+                        remaining_size = updated_positions[0].get('size')
+                        if attempt < max_retries:
+                            logger.warning(
+                                f"Position still open after close attempt {attempt + 1}: "
+                                f"{symbol} size={remaining_size}, retrying..."
+                            )
+                            continue  # Retry
+                        else:
+                            raise BybitError(
+                                f"Position still open after {max_retries + 1} attempts: "
+                                f"{symbol} size={remaining_size}"
+                            )
+
+                logger.info(f"Position closed for {symbol}")
+                return
+
+            except BybitError:
+                raise
+            except Exception as e:
+                if attempt < max_retries:
+                    logger.warning(f"Close attempt {attempt + 1} failed: {e}, retrying...")
+                    await asyncio.sleep(1)
+                    continue
+                logger.error(f"Error closing position: {e}")
+                raise BybitError(f"Failed to close position: {str(e)}")
 
     async def partial_close(self, symbol: str, percent: float):
         """
@@ -228,11 +268,10 @@ class PositionsMixin:
                         f"(entry: ${entry_price:.4f}, new SL: ${new_sl:.4f})"
                     )
 
-            # Обновляем SL через set_trading_stop
-            await self.set_trading_stop(
+            # Обновляем SL через update_trading_stop (сохраняет существующий TP)
+            await self.update_trading_stop(
                 symbol=symbol,
-                stop_loss=new_sl_price,
-                sl_trigger_by="MarkPrice"
+                stop_loss=new_sl_price
             )
 
             logger.info(f"Stop Loss moved for {symbol}: ${new_sl_price}")
