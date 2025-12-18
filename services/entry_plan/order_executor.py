@@ -323,15 +323,23 @@ async def cancel_existing_tp(plan: EntryPlan) -> int:
         client = client_pool.get_client(plan.testnet)
         short_plan_id = plan.plan_id[:8]
 
-        cancelled = await client.cancel_orders_by_prefix(
+        # Ищем TP ордера по обоим форматам prefix:
+        # - старый: EP:{plan_id}:TP
+        # - новый: EP:{plan_id}:T{timestamp}
+        cancelled_old = await client.cancel_orders_by_prefix(
             symbol=plan.symbol,
             client_order_id_prefix=f"EP:{short_plan_id}:TP"
         )
+        cancelled_new = await client.cancel_orders_by_prefix(
+            symbol=plan.symbol,
+            client_order_id_prefix=f"EP:{short_plan_id}:T"
+        )
 
-        if cancelled:
-            logger.info(f"Cancelled {len(cancelled)} existing TP orders for plan {plan.plan_id}")
+        total_cancelled = len(cancelled_old) + len(cancelled_new)
+        if total_cancelled:
+            logger.info(f"Cancelled {total_cancelled} existing TP orders for plan {plan.plan_id}")
 
-        return len(cancelled)
+        return total_cancelled
     except Exception as e:
         logger.error(f"Error cancelling existing TP: {e}")
         return 0
@@ -399,11 +407,15 @@ async def setup_ladder_tp(
 
         if tp_levels:
             short_plan_id = plan.plan_id[:8]
+            # Добавляем timestamp для уникальности client_order_id
+            # (Bybit отклоняет дубликаты orderLinkId даже после отмены)
+            import time
+            ts = int(time.time() * 1000) % 100000  # Последние 5 цифр timestamp
             await client.place_ladder_tp(
                 symbol=plan.symbol,
                 position_side=position_side,
                 tp_levels=tp_levels,
-                client_order_id_prefix=f"EP:{short_plan_id}:TP"
+                client_order_id_prefix=f"EP:{short_plan_id}:T{ts}"
             )
             logger.info(
                 f"Ladder TP set: {len(tp_levels)} levels for {plan.symbol}, "

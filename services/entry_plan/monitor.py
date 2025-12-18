@@ -4,6 +4,7 @@ Entry Plan Monitor
 Мониторинг Entry Plans с несколькими ордерами (ladder entry).
 Отслеживает активацию, fills, cancel условия и устанавливает SL/TP.
 """
+import asyncio
 import logging
 from typing import Dict, Optional, List
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ from services.entry_plan.notification import (
     notify_plan_cancelled_position_closed,
     notify_sl_tp_set_early,
     notify_tp_updated,
+    notify_tp_update_failed,
 )
 from services.trade_logger import TradeLogger
 
@@ -548,14 +550,27 @@ class EntryPlanMonitor(BaseMonitor):
             # Отменяем старые TP
             await cancel_existing_tp(plan)
 
-            # Ставим новые TP на обновлённый qty
-            success = await setup_ladder_tp(plan, use_filled_qty=True)
+            # Ставим новые TP на обновлённый qty с retry
+            success = False
+            for attempt in range(3):
+                success = await setup_ladder_tp(plan, use_filled_qty=True)
+                if success:
+                    break
+                logger.warning(f"TP setup attempt {attempt + 1}/3 failed, retrying...")
+                await asyncio.sleep(1)
+
             if success:
                 plan.tp_filled_qty_at_set = plan.filled_qty
                 await self.storage.update_plan(plan)
-
-            # Уведомляем пользователя
-            await notify_tp_updated(self.bot, plan)
+                # Уведомляем пользователя ТОЛЬКО при успешном обновлении
+                await notify_tp_updated(self.bot, plan)
+            else:
+                # TP не удалось установить — логируем и уведомляем
+                logger.error(
+                    f"Failed to update TP for plan {plan.plan_id} after 3 attempts. "
+                    f"Old TP cancelled, new TP not placed!"
+                )
+                await notify_tp_update_failed(self.bot, plan)
 
     # ==================== Plan Completion ====================
 
@@ -590,15 +605,34 @@ class EntryPlanMonitor(BaseMonitor):
                 if plan.tp_set and plan.filled_qty > plan.tp_filled_qty_at_set:
                     logger.info(f"Final TP update: qty {plan.tp_filled_qty_at_set:.4f} → {plan.filled_qty:.4f}")
                     await cancel_existing_tp(plan)
-                    success = await setup_ladder_tp(plan, use_filled_qty=True)
+                    # Retry логика
+                    success = False
+                    for attempt in range(3):
+                        success = await setup_ladder_tp(plan, use_filled_qty=True)
+                        if success:
+                            break
+                        logger.warning(f"Final TP setup attempt {attempt + 1}/3 failed")
+                        await asyncio.sleep(1)
                     if success:
                         plan.tp_filled_qty_at_set = plan.filled_qty
+                    else:
+                        logger.error(f"Failed to set final TP for plan {plan.plan_id}")
+                        await notify_tp_update_failed(self.bot, plan)
                 elif not plan.tp_set:
-                    # TP ещё не было → ставим
-                    success = await setup_ladder_tp(plan, use_filled_qty=True)
+                    # TP ещё не было → ставим с retry
+                    success = False
+                    for attempt in range(3):
+                        success = await setup_ladder_tp(plan, use_filled_qty=True)
+                        if success:
+                            break
+                        logger.warning(f"Initial TP setup attempt {attempt + 1}/3 failed")
+                        await asyncio.sleep(1)
                     if success:
                         plan.tp_set = True
                         plan.tp_filled_qty_at_set = plan.filled_qty
+                    else:
+                        logger.error(f"Failed to set initial TP for plan {plan.plan_id}")
+                        await notify_tp_update_failed(self.bot, plan)
 
             await self.storage.update_plan(plan)
 
@@ -621,18 +655,34 @@ class EntryPlanMonitor(BaseMonitor):
             # TP: финальное обновление если нужно
             if plan.targets:
                 if plan.tp_set and plan.filled_qty != plan.tp_filled_qty_at_set:
-                    # TP были на другой qty → обновляем
+                    # TP были на другой qty → обновляем с retry
                     logger.info(f"Partial cancel: updating TP qty {plan.tp_filled_qty_at_set:.4f} → {plan.filled_qty:.4f}")
                     await cancel_existing_tp(plan)
-                    success = await setup_ladder_tp(plan, use_filled_qty=True)
+                    success = False
+                    for attempt in range(3):
+                        success = await setup_ladder_tp(plan, use_filled_qty=True)
+                        if success:
+                            break
+                        logger.warning(f"Partial TP setup attempt {attempt + 1}/3 failed")
+                        await asyncio.sleep(1)
                     if success:
                         plan.tp_filled_qty_at_set = plan.filled_qty
+                    else:
+                        logger.error(f"Failed to set TP for partial position {plan.plan_id}")
                 elif not plan.tp_set:
-                    # TP ещё не было → ставим
-                    success = await setup_ladder_tp(plan, use_filled_qty=True)
+                    # TP ещё не было → ставим с retry
+                    success = False
+                    for attempt in range(3):
+                        success = await setup_ladder_tp(plan, use_filled_qty=True)
+                        if success:
+                            break
+                        logger.warning(f"Partial initial TP attempt {attempt + 1}/3 failed")
+                        await asyncio.sleep(1)
                     if success:
                         plan.tp_set = True
                         plan.tp_filled_qty_at_set = plan.filled_qty
+                    else:
+                        logger.error(f"Failed to set initial TP for partial {plan.plan_id}")
 
             await self.storage.update_plan(plan)
 

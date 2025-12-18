@@ -243,3 +243,26 @@ async def notify_tp_updated(bot: Bot, plan: EntryPlan):
         )
     except Exception as e:
         logger.error(f"Failed to send TP updated notification: {e}")
+
+
+async def notify_tp_update_failed(bot: Bot, plan: EntryPlan):
+    """Уведомление о неудаче обновления TP"""
+    try:
+        side_emoji = "🟢" if plan.side == "Long" else "🔴"
+
+        message = f"""
+⚠️ <b>Ошибка обновления TP!</b>
+
+{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
+📊 <b>Filled:</b> {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders)})
+📦 <b>Qty:</b> {plan.filled_qty:.4f}
+
+<i>Не удалось пересчитать TP ордера. SL активен. Проверьте позицию!</i>
+"""
+        await bot.send_message(
+            chat_id=plan.user_id,
+            text=message.strip(),
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Failed to send TP update failed notification: {e}")

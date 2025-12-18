@@ -368,3 +368,111 @@ def get_empty_positions_kb() -> InlineKeyboardMarkup:
     )
 
     return builder.as_markup()
+
+
+# ============================================================
+# TP MANAGEMENT KEYBOARDS
+# ============================================================
+
+def get_tp_management_kb(symbol: str, has_tp_orders: bool = False) -> InlineKeyboardMarkup:
+    """
+    Клавиатура для управления Take Profit
+
+    Args:
+        symbol: Торговая пара
+        has_tp_orders: Есть ли активные TP ордера
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Добавить новый TP
+    builder.row(
+        InlineKeyboardButton(
+            text="➕ Добавить TP",
+            callback_data=f"tp_add:{symbol}"
+        )
+    )
+
+    # Удалить все TP (если есть)
+    if has_tp_orders:
+        builder.row(
+            InlineKeyboardButton(
+                text="🗑 Удалить все TP",
+                callback_data=f"tp_cancel_all:{symbol}"
+            )
+        )
+
+    # Назад к позиции
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data=f"pos_detail:{symbol}")
+    )
+
+    return builder.as_markup()
+
+
+def get_tp_percent_kb(symbol: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура для выбора % от объёма позиции для TP
+
+    Args:
+        symbol: Торговая пара
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Стандартные проценты
+    builder.row(
+        InlineKeyboardButton(text="25%", callback_data=f"tp_pct:{symbol}:25"),
+        InlineKeyboardButton(text="50%", callback_data=f"tp_pct:{symbol}:50"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="75%", callback_data=f"tp_pct:{symbol}:75"),
+        InlineKeyboardButton(text="100%", callback_data=f"tp_pct:{symbol}:100"),
+    )
+
+    # Кастомный процент
+    builder.row(
+        InlineKeyboardButton(
+            text="✏️ Свой %",
+            callback_data=f"tp_pct_custom:{symbol}"
+        )
+    )
+
+    # Отмена
+    builder.row(
+        InlineKeyboardButton(text="❌ Отмена", callback_data=f"pos_modify_tp:{symbol}")
+    )
+
+    return builder.as_markup()
+
+
+def get_tp_confirm_kb(symbol: str, price: str, percent: int) -> InlineKeyboardMarkup:
+    """
+    Подтверждение установки TP
+
+    Args:
+        symbol: Торговая пара
+        price: Цена TP
+        percent: Процент от объёма
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    builder.row(
+        InlineKeyboardButton(
+            text="✅ Подтвердить",
+            callback_data=f"tp_confirm:{symbol}:{price}:{percent}"
+        ),
+        InlineKeyboardButton(
+            text="❌ Отмена",
+            callback_data=f"pos_modify_tp:{symbol}"
+        )
+    )
+
+    return builder.as_markup()

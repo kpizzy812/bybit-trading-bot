@@ -10,6 +10,7 @@ from bot.handlers.positions.list_handlers import router as list_router
 from bot.handlers.positions.detail_handlers import router as detail_router
 from bot.handlers.positions.action_handlers import router as action_router
 from bot.handlers.positions.entry_plan_handlers import router as entry_plan_router
+from bot.handlers.positions.tp_handlers import router as tp_router
 
 # Создаём главный роутер
 router = Router()
@@ -19,5 +20,6 @@ router.include_router(list_router)
 router.include_router(detail_router)
 router.include_router(action_router)
 router.include_router(entry_plan_router)
+router.include_router(tp_router)
 
 __all__ = ['router', 'PositionStates']
