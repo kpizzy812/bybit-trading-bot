@@ -1,6 +1,7 @@
 """
 Форматирование данных позиций, ордеров и Entry Plans для отображения.
 """
+import html
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,11 +21,14 @@ def format_entry_plan_detail(plan) -> str:
     }
     status_text = status_map.get(plan.status, plan.status)
 
+    # Экранируем опасные поля
+    safe_mode = html.escape(str(plan.mode)) if plan.mode else "N/A"
+
     text = f"""
 📋 <b>Entry Plan</b>
 
 {side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}
-📊 Mode: {plan.mode}
+📊 Mode: {safe_mode}
 📈 Status: {status_text}
 
 <b>Progress:</b>
@@ -57,7 +61,8 @@ Filled: {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders
             status_icon = "⚪"
             price_text = f"${price:.2f}"
 
-        text += f"  {status_icon} {tag}: {price_text} ({size_pct:.0f}%)\n"
+        safe_tag = html.escape(str(tag))
+        text += f"  {status_icon} {safe_tag}: {price_text} ({size_pct:.0f}%)\n"
 
     text += f"""
 <b>Risk Management:</b>
@@ -73,7 +78,8 @@ Filled: {plan.fill_percentage:.0f}% ({plan.filled_orders_count}/{len(plan.orders
     if plan.cancel_if:
         text += f"\n<b>Cancel if:</b>\n"
         for cond in plan.cancel_if:
-            text += f"  • {cond}\n"
+            safe_cond = html.escape(str(cond))
+            text += f"  • {safe_cond}\n"
 
     text += f"\n⏰ Valid: {plan.time_valid_hours}h"
 
