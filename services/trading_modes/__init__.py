@@ -49,6 +49,12 @@ from services.trading_modes.risk_adjuster import (
     adjust_risk_for_mode,
     get_leverage_for_mode,
 )
+from services.trading_modes.prompt_builder import (
+    ModePromptBuilder,
+    get_mode_prompt_builder,
+    build_mode_profile,
+    get_mode_notes_schema,
+)
 
 __all__ = [
     # Models
@@ -81,4 +87,9 @@ __all__ = [
     "get_risk_adjuster",
     "adjust_risk_for_mode",
     "get_leverage_for_mode",
+    # Prompt Builder
+    "ModePromptBuilder",
+    "get_mode_prompt_builder",
+    "build_mode_profile",
+    "get_mode_notes_schema",
 ]
