@@ -315,6 +315,30 @@ def parse_entry_plan(
     activation_type = activation.get('type', 'immediate')
     activation_level = activation.get('level')
 
+    # === ACTIVATION BUFFER для touch-планов ===
+    # Сдвигаем activation_level раньше чтобы успеть выставить ордера
+    # до того как цена достигнет E1
+    ACTIVATION_BUFFER_PCT = 0.5  # 0.5% буфер
+    if activation_type == 'touch' and activation_level:
+        original_level = activation_level
+        if side.lower() == 'long':
+            # Long: цена идёт вниз к E1 → активируем на 0.5% выше E1
+            buffered_level = activation_level * (1 + ACTIVATION_BUFFER_PCT / 100)
+            logger.info(
+                f"Activation buffer (Long): {original_level:.2f} → {buffered_level:.2f} "
+                f"(+{ACTIVATION_BUFFER_PCT}%)"
+            )
+        else:
+            # Short: цена идёт вверх к E1 → активируем на 0.5% ниже E1
+            buffered_level = activation_level * (1 - ACTIVATION_BUFFER_PCT / 100)
+            logger.info(
+                f"Activation buffer (Short): {original_level:.2f} → {buffered_level:.2f} "
+                f"(-{ACTIVATION_BUFFER_PCT}%)"
+            )
+        # Обновляем и переменную и словарь
+        activation_level = buffered_level
+        activation['level'] = buffered_level
+
     # Получаем границы entry zone
     entry_prices = [o['price'] for o in orders_data]
     entry_max = max(entry_prices) if entry_prices else 0
