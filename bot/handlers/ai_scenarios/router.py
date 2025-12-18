@@ -298,13 +298,35 @@ async def ai_category_selected(callback: CallbackQuery, state: FSMContext):
         await callback.answer("❌ Нет данных для этой категории", show_alert=True)
         return
 
-    text = (
-        f"🤖 <b>AI Trading Scenarios</b>\n"
-        f"{mode.emoji} Mode: <b>{mode.name}</b>\n\n"
-        f"<b>{category_label}</b>\n"
-        f"Топ {len(symbols)} символов:\n\n"
-        "Выбери символ для анализа:"
-    )
+    # Формируем текст с данными о символах
+    lines = [
+        f"🤖 <b>AI Trading Scenarios</b>",
+        f"{mode.emoji} Mode: <b>{mode.name}</b>\n",
+        f"<b>{category_label}</b>\n",
+    ]
+
+    for i, m in enumerate(symbols[:20], 1):
+        coin = m.symbol.replace("USDT", "")
+        vol_m = m.turnover_24h / 1_000_000
+
+        # Формат зависит от категории
+        if category == "pumping":
+            chg = f"+{m.price_change_pct:.1f}%" if m.price_change_pct > 0 else f"{m.price_change_pct:.1f}%"
+            lines.append(f"{i}. <b>{coin}</b> {chg} (${vol_m:.0f}M)")
+        elif category == "dumping":
+            lines.append(f"{i}. <b>{coin}</b> {m.price_change_pct:.1f}% (${vol_m:.0f}M)")
+        elif category == "volatile":
+            lines.append(f"{i}. <b>{coin}</b> ±{m.range_pct:.1f}% (${vol_m:.0f}M)")
+        elif category == "popular":
+            chg = f"+{m.price_change_pct:.1f}%" if m.price_change_pct > 0 else f"{m.price_change_pct:.1f}%"
+            lines.append(f"{i}. <b>{coin}</b> ${vol_m:.0f}M ({chg})")
+        else:
+            # trending
+            chg = f"+{m.price_change_pct:.1f}%" if m.price_change_pct > 0 else f"{m.price_change_pct:.1f}%"
+            lines.append(f"{i}. <b>{coin}</b> {chg} (${vol_m:.0f}M)")
+
+    lines.append("\n📊 Выбери символ для анализа:")
+    text = "\n".join(lines)
 
     keyboard = ai_scenarios_kb.get_category_symbols_keyboard(symbols, category, mode_id)
 

@@ -196,6 +196,8 @@ def get_category_symbols_keyboard(
     """
     Клавиатура с топ-20 символами категории.
 
+    Только тикеры без данных (данные в тексте сообщения).
+
     Args:
         symbols: Список символов из UniverseService
         category: Категория (trending, popular, pumping, dumping, volatile)
@@ -207,40 +209,18 @@ def get_category_symbols_keyboard(
     builder = InlineKeyboardBuilder()
     rows = []
 
-    # Символы (до 20 штук, по 4 в ряд)
-    count = 0
+    # Символы (до 20 штук, по 5 в ряд) - только тикер
     row_count = 0
     for m in symbols[:20]:
         coin = m.symbol.replace("USDT", "")
-
-        # Формат лейбла зависит от категории
-        if category == "pumping":
-            label = f"{coin} +{m.price_change_pct:.0f}%" if m.price_change_pct > 0 else f"{coin} {m.price_change_pct:.0f}%"
-        elif category == "dumping":
-            label = f"{coin} {m.price_change_pct:.0f}%"
-        elif category == "volatile":
-            label = f"{coin} ±{m.range_pct:.0f}%"
-        elif category == "popular":
-            vol_m = m.turnover_24h / 1_000_000
-            label = f"{coin} ${vol_m:.0f}M" if vol_m >= 10 else coin
-        else:
-            # trending - показываем score или change
-            if m.price_change_pct > 0:
-                label = f"{coin} +{m.price_change_pct:.0f}%"
-            elif m.price_change_pct < 0:
-                label = f"{coin} {m.price_change_pct:.0f}%"
-            else:
-                label = coin
-
-        builder.button(text=label, callback_data=f"ai:symbol:{m.symbol}")
-        count += 1
+        builder.button(text=coin, callback_data=f"ai:symbol:{m.symbol}")
         row_count += 1
 
-        if row_count == 4:
-            rows.append(4)
+        if row_count == 5:
+            rows.append(5)
             row_count = 0
 
-    # Добавить остаток если не кратно 4
+    # Добавить остаток
     if row_count > 0:
         rows.append(row_count)
 
