@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from bot.states.trade_states import SettingsStates
 from bot.keyboards.settings_kb import (
     get_settings_menu_kb,
+    get_capital_mode_kb,
     get_default_risk_kb,
     get_default_leverage_kb,
     get_tp_mode_kb,
@@ -39,6 +40,7 @@ async def show_settings_menu(callback: CallbackQuery, settings_storage):
 
     # Формируем текст с текущими настройками
     testnet_mode = user_settings.testnet_mode
+    capital_mode = user_settings.trading_capital_mode
     default_risk = user_settings.default_risk_usd
     default_leverage = user_settings.default_leverage
     default_margin_mode = user_settings.default_margin_mode
@@ -46,6 +48,7 @@ async def show_settings_menu(callback: CallbackQuery, settings_storage):
     default_tp_mode = user_settings.default_tp_mode
 
     mode_text = "🧪 <b>Testnet</b>" if testnet_mode else "🔴 <b>Live Trading</b>"
+    capital_mode_text = "📊 Auto (%)" if capital_mode == 'auto' else "💵 Manual ($)"
     shorts_text = "✅ Включены" if shorts_enabled else "❌ Выключены"
 
     text = f"""
@@ -54,6 +57,7 @@ async def show_settings_menu(callback: CallbackQuery, settings_storage):
 <b>Текущие параметры:</b>
 
 🌐 Режим: {mode_text}
+💵 Capital Mode: {capital_mode_text}
 💰 Дефолтный риск: ${default_risk}
 📊 Дефолтное плечо: {default_leverage}x
 🔀 Режим маржи: {default_margin_mode}
@@ -71,6 +75,58 @@ async def show_settings_menu(callback: CallbackQuery, settings_storage):
         text.strip(),
         reply_markup=get_settings_menu_kb()
     )
+
+
+# ============================================================
+# CALLBACK: Capital Mode (manual/auto)
+# ============================================================
+
+@router.callback_query(F.data == "set_capital_mode")
+async def set_capital_mode_menu(callback: CallbackQuery, settings_storage):
+    """Меню выбора режима капитала"""
+    await callback.answer()
+
+    user_id = callback.from_user.id
+    user_settings = await settings_storage.get_settings(user_id)
+    current_mode = user_settings.trading_capital_mode
+
+    await callback.message.edit_text(
+        f"💵 <b>Режим капитала (Capital Mode)</b>\n\n"
+        f"Текущий режим: <b>{'📊 Auto (%)' if current_mode == 'auto' else '💵 Manual ($)'}</b>\n\n"
+        f"<b>💵 Manual ($)</b>\n"
+        f"Риск указывается в фиксированных USD.\n"
+        f"Пресеты: $5, $10, $15, Custom\n\n"
+        f"<b>📊 Auto (%)</b>\n"
+        f"Риск указывается в % от баланса аккаунта.\n"
+        f"Пресеты: 0.25%, 0.5%, 0.75%, 1%, 1.5%, 2%\n"
+        f"<i>Баланс берётся автоматически из Bybit</i>",
+        reply_markup=get_capital_mode_kb(current_mode)
+    )
+
+
+@router.callback_query(F.data.startswith("set_capital_mode:"))
+async def set_capital_mode_value(callback: CallbackQuery, settings_storage):
+    """Установить режим капитала"""
+    # Парсим: set_capital_mode:manual или set_capital_mode:auto
+    new_mode = callback.data.split(":")[1]
+
+    user_id = callback.from_user.id
+
+    # Валидация
+    if new_mode not in ('manual', 'auto'):
+        await callback.answer("❌ Неверный режим", show_alert=True)
+        return
+
+    # Сохраняем
+    await settings_storage.update_setting(user_id, 'trading_capital_mode', new_mode)
+
+    mode_text = "📊 Auto (%)" if new_mode == 'auto' else "💵 Manual ($)"
+    await callback.answer(f"✅ Режим установлен: {mode_text}")
+
+    logger.info(f"User {user_id} set trading_capital_mode: {new_mode}")
+
+    # Возвращаемся к меню настроек
+    await show_settings_menu(callback, settings_storage)
 
 
 # ============================================================

@@ -17,12 +17,16 @@ def get_settings_menu_kb() -> InlineKeyboardMarkup:
 
     # Категории настроек
     builder.row(
-        InlineKeyboardButton(text="💰 Default Risk", callback_data="set_default_risk"),
-        InlineKeyboardButton(text="📊 Default Leverage", callback_data="set_default_leverage")
+        InlineKeyboardButton(text="💵 Capital Mode", callback_data="set_capital_mode"),
+        InlineKeyboardButton(text="💰 Default Risk", callback_data="set_default_risk")
     )
 
     builder.row(
-        InlineKeyboardButton(text="🎯 TP Mode", callback_data="set_tp_mode"),
+        InlineKeyboardButton(text="📊 Default Leverage", callback_data="set_default_leverage"),
+        InlineKeyboardButton(text="🎯 TP Mode", callback_data="set_tp_mode")
+    )
+
+    builder.row(
         InlineKeyboardButton(text="🔴 Shorts", callback_data="set_shorts_enabled")
     )
 
@@ -33,6 +37,38 @@ def get_settings_menu_kb() -> InlineKeyboardMarkup:
 
     builder.row(
         InlineKeyboardButton(text="◀️ Назад", callback_data="set_back_to_main")
+    )
+
+    return builder.as_markup()
+
+
+def get_capital_mode_kb(current_mode: str) -> InlineKeyboardMarkup:
+    """
+    Клавиатура для выбора режима капитала (manual/auto)
+
+    Args:
+        current_mode: Текущий режим ('manual' или 'auto')
+
+    Returns:
+        InlineKeyboardMarkup
+    """
+    builder = InlineKeyboardBuilder()
+
+    # Manual mode - фиксированные USD
+    manual_text = "💵 Manual ($)" if current_mode != 'manual' else "✅ 💵 Manual ($)"
+    builder.row(
+        InlineKeyboardButton(text=manual_text, callback_data="set_capital_mode:manual")
+    )
+
+    # Auto mode - % от баланса
+    auto_text = "📊 Auto (%)" if current_mode != 'auto' else "✅ 📊 Auto (%)"
+    builder.row(
+        InlineKeyboardButton(text=auto_text, callback_data="set_capital_mode:auto")
+    )
+
+    # Назад
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад", callback_data="set_back_to_menu")
     )
 
     return builder.as_markup()
