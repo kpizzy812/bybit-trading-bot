@@ -274,6 +274,7 @@ def get_scenario_detail_keyboard(
     scenario_index: int,
     show_chart_button: bool = False,
     is_blocked: bool = False,
+    risk_mode: str = 'usd',
 ) -> InlineKeyboardMarkup:
     """
     Клавиатура для детального просмотра сценария
@@ -282,6 +283,7 @@ def get_scenario_detail_keyboard(
         scenario_index: Индекс сценария в списке
         show_chart_button: Показывать ли кнопку графика (если текст длинный)
         is_blocked: Заблокирован ли сценарий по Real EV
+        risk_mode: 'usd' для $ пресетов, 'percent' для % от баланса
 
     Returns:
         InlineKeyboardMarkup с действиями
@@ -302,13 +304,22 @@ def get_scenario_detail_keyboard(
         return builder.as_markup()
 
     # Выбор риска для quick trade
-    builder.button(text="💰 Trade $5", callback_data=f"ai:trade:{scenario_index}:5")
-    builder.button(text="💰 Trade $10", callback_data=f"ai:trade:{scenario_index}:10")
-    builder.button(text="💰 Trade $20", callback_data=f"ai:trade:{scenario_index}:20")
-    builder.button(text="💰 Trade $50", callback_data=f"ai:trade:{scenario_index}:50")
-
-    # Custom риск
-    builder.button(text="✏️ Custom Risk", callback_data=f"ai:custom_risk:{scenario_index}")
+    if risk_mode == 'percent':
+        # Процентные пресеты (когда trading_capital_mode == 'auto')
+        builder.button(text="💰 0.5%", callback_data=f"ai:trade_pct:{scenario_index}:0.5")
+        builder.button(text="💰 0.75%", callback_data=f"ai:trade_pct:{scenario_index}:0.75")
+        builder.button(text="💰 1%", callback_data=f"ai:trade_pct:{scenario_index}:1")
+        builder.button(text="💰 1.5%", callback_data=f"ai:trade_pct:{scenario_index}:1.5")
+        # Custom процент
+        builder.button(text="✏️ Custom %", callback_data=f"ai:custom_risk_pct:{scenario_index}")
+    else:
+        # USD пресеты (когда trading_capital_mode == 'manual')
+        builder.button(text="💰 Trade $5", callback_data=f"ai:trade:{scenario_index}:5")
+        builder.button(text="💰 Trade $10", callback_data=f"ai:trade:{scenario_index}:10")
+        builder.button(text="💰 Trade $20", callback_data=f"ai:trade:{scenario_index}:20")
+        builder.button(text="💰 Trade $50", callback_data=f"ai:trade:{scenario_index}:50")
+        # Custom риск
+        builder.button(text="✏️ Custom Risk", callback_data=f"ai:custom_risk:{scenario_index}")
 
     # Кнопки управления
     builder.button(text="🔙 К сценариям", callback_data="ai:back_to_list")

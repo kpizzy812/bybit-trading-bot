@@ -72,7 +72,7 @@ async def stop_mode_selected(callback: CallbackQuery, state: FSMContext):
 # ============================================================
 
 @router.callback_query(TradeStates.choosing_stop_percent, F.data.startswith("stop_percent:"))
-async def stop_percent_selected(callback: CallbackQuery, state: FSMContext):
+async def stop_percent_selected(callback: CallbackQuery, state: FSMContext, settings_storage):
     """Обработка выбора % для стопа"""
     percent_str = callback.data.split(":")[1]
 
@@ -104,7 +104,7 @@ async def stop_percent_selected(callback: CallbackQuery, state: FSMContext):
 
         # Переходим к выбору риска (импорт здесь для избежания circular import)
         from .risk_leverage import move_to_risk_selection
-        await move_to_risk_selection(callback.message, state)
+        await move_to_risk_selection(callback.message, state, settings_storage, callback.from_user.id)
         await callback.answer()
 
     except ValueError:
@@ -112,7 +112,7 @@ async def stop_percent_selected(callback: CallbackQuery, state: FSMContext):
 
 
 @router.message(TradeStates.choosing_stop_percent, F.text)
-async def custom_stop_percent_entered(message: Message, state: FSMContext):
+async def custom_stop_percent_entered(message: Message, state: FSMContext, settings_storage):
     """Обработка custom % для стопа"""
     try:
         percent = float(message.text.strip())
@@ -136,7 +136,7 @@ async def custom_stop_percent_entered(message: Message, state: FSMContext):
 
         # Переходим к выбору риска
         from .risk_leverage import move_to_risk_selection
-        await move_to_risk_selection(message, state)
+        await move_to_risk_selection(message, state, settings_storage, message.from_user.id)
 
     except ValueError:
         await message.answer("❌ Введи корректный % (например: 1.8)")
@@ -147,7 +147,7 @@ async def custom_stop_percent_entered(message: Message, state: FSMContext):
 # ============================================================
 
 @router.message(TradeStates.entering_stop, F.text)
-async def stop_price_entered(message: Message, state: FSMContext):
+async def stop_price_entered(message: Message, state: FSMContext, settings_storage):
     """Обработка ввода цены стопа вручную"""
     try:
         stop_price = float(message.text.strip())
@@ -181,7 +181,7 @@ async def stop_price_entered(message: Message, state: FSMContext):
 
         # Переходим к выбору риска
         from .risk_leverage import move_to_risk_selection
-        await move_to_risk_selection(message, state)
+        await move_to_risk_selection(message, state, settings_storage, message.from_user.id)
 
     except ValueError:
         await message.answer("❌ Введи корректную цену (например: 128.50)")

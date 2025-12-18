@@ -33,6 +33,14 @@ from services.trade_logger import TradeRecord
 from services.entry_plan import EntryPlan, EntryOrder
 from services.scenarios_cache import get_scenarios_cache
 from services.charts import get_chart_generator
+from services.risk_percent import (
+    get_equity_cached,
+    calc_risk_usd_from_pct,
+    validate_risk_pct,
+    validate_risk_usd,
+    MIN_RISK_PCT,
+    MAX_RISK_PCT,
+)
 from services.real_ev import get_gate_checker, GateStatus
 from services.trading_modes import get_mode_registry, MEME_SYMBOLS
 from services.trading_modes.safety_checker import get_safety_checker, SafetyCheckResult
@@ -726,7 +734,7 @@ async def show_scenarios_list(
 
 
 @router.callback_query(AIScenarioStates.viewing_scenarios, F.data.startswith("ai:scenario:"))
-async def ai_scenario_selected(callback: CallbackQuery, state: FSMContext):
+async def ai_scenario_selected(callback: CallbackQuery, state: FSMContext, settings_storage):
     """Показать детали выбранного сценария"""
     scenario_index = int(callback.data.split(":")[2])
 
@@ -743,14 +751,19 @@ async def ai_scenario_selected(callback: CallbackQuery, state: FSMContext):
     current_price = data.get("current_price", 0.0)
     market_context = data.get("market_context")
 
-    await state.update_data(selected_scenario_index=scenario_index)
+    # Определяем режим риска
+    user_settings = await settings_storage.get_settings(callback.from_user.id)
+    risk_mode = 'percent' if user_settings.trading_capital_mode == 'auto' else 'usd'
+
+    await state.update_data(selected_scenario_index=scenario_index, risk_mode=risk_mode)
     await state.set_state(AIScenarioStates.viewing_detail)
 
     # Показать детали сценария с графиком
     await show_scenario_detail(
         callback.message, scenario, scenario_index,
         symbol=symbol, timeframe=timeframe, current_price=current_price,
-        market_context=market_context, user_id=callback.from_user.id
+        market_context=market_context, user_id=callback.from_user.id,
+        risk_mode=risk_mode
     )
 
     await callback.answer()
@@ -765,6 +778,7 @@ async def show_scenario_detail(
     current_price: float = 0.0,
     market_context: Optional[dict] = None,
     user_id: Optional[int] = None,
+    risk_mode: str = 'usd',
 ):
     """Показать детальную карточку сценария с графиком и EV метриками"""
 
@@ -1031,7 +1045,7 @@ async def show_scenario_detail(
             caption=card,
             parse_mode="HTML",
             reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(
-                scenario_index, show_chart_button=False, is_blocked=is_blocked
+                scenario_index, show_chart_button=False, is_blocked=is_blocked, risk_mode=risk_mode
             )
         )
     elif chart_png:
@@ -1042,7 +1056,7 @@ async def show_scenario_detail(
             card,
             parse_mode="HTML",
             reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(
-                scenario_index, show_chart_button=False, is_blocked=is_blocked
+                scenario_index, show_chart_button=False, is_blocked=is_blocked, risk_mode=risk_mode
             )
         )
     else:
@@ -1051,7 +1065,7 @@ async def show_scenario_detail(
             card,
             parse_mode="HTML",
             reply_markup=ai_scenarios_kb.get_scenario_detail_keyboard(
-                scenario_index, show_chart_button=True, is_blocked=is_blocked
+                scenario_index, show_chart_button=True, is_blocked=is_blocked, risk_mode=risk_mode
             )
         )
 
@@ -1129,10 +1143,10 @@ async def ai_show_chart(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(AIScenarioStates.viewing_detail, F.data.startswith("ai:custom_risk:"))
 async def ai_custom_risk_start(callback: CallbackQuery, state: FSMContext):
-    """Начать ввод custom риска"""
+    """Начать ввод custom риска в USD"""
     scenario_index = int(callback.data.split(":")[2])
 
-    await state.update_data(selected_scenario_index=scenario_index)
+    await state.update_data(selected_scenario_index=scenario_index, input_mode="risk_usd")
     await state.set_state(AIScenarioStates.entering_custom_risk)
 
     await callback.message.edit_text(
@@ -1145,37 +1159,102 @@ async def ai_custom_risk_start(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+@router.callback_query(AIScenarioStates.viewing_detail, F.data.startswith("ai:custom_risk_pct:"))
+async def ai_custom_risk_pct_start(callback: CallbackQuery, state: FSMContext, settings_storage):
+    """Начать ввод custom риска в процентах"""
+    scenario_index = int(callback.data.split(":")[2])
+
+    # Получаем баланс для показа в сообщении
+    data = await state.get_data()
+    user_settings = await settings_storage.get_settings(callback.from_user.id)
+
+    equity_info = ""
+    try:
+        equity, updated_data = await get_equity_cached(data, user_settings)
+        await state.update_data(**updated_data)
+        equity_info = f"\n💵 <b>Баланс:</b> ${equity:.2f}\n"
+    except ValueError:
+        pass
+
+    await state.update_data(selected_scenario_index=scenario_index, input_mode="risk_pct")
+    await state.set_state(AIScenarioStates.entering_custom_risk)
+
+    await callback.message.edit_text(
+        f"💰 <b>Custom Risk %</b>\n"
+        f"{equity_info}\n"
+        f"Введи процент риска ({MIN_RISK_PCT}% – {MAX_RISK_PCT}%):\n"
+        f"<i>Рекомендуется: 0.5–1%</i>\n\n"
+        f"Например: <code>0.75</code>",
+        reply_markup=ai_scenarios_kb.get_custom_risk_cancel_keyboard(scenario_index)
+    )
+
+    await callback.answer()
+
+
 @router.message(AIScenarioStates.entering_custom_risk)
 async def ai_custom_risk_process(message: Message, state: FSMContext, settings_storage):
-    """Обработать введённый пользователем custom риск"""
+    """Обработать введённый пользователем custom риск (USD или %)"""
     user_id = message.from_user.id
+    data = await state.get_data()
+    input_mode = data.get("input_mode", "risk_usd")
 
     try:
-        # Парсим риск
-        risk_text = message.text.strip().replace(",", ".").replace("$", "")
-        custom_risk = float(risk_text)
+        # Парсим значение
+        value_text = message.text.strip().replace(",", ".").replace("$", "").replace("%", "")
+        value = float(value_text)
 
-        # Валидация
-        if custom_risk <= 0:
-            await message.answer("⚠️ Риск должен быть положительным числом!")
+        if value <= 0:
+            await message.answer("⚠️ Значение должно быть положительным числом!")
             return
 
-        if custom_risk < 1:
-            await message.answer("⚠️ Минимальный риск: $1")
-            return
+        settings = await settings_storage.get_settings(user_id)
 
-        if custom_risk > 500:
-            await message.answer("⚠️ Максимальный риск: $500")
-            return
+        # === Режим процентного риска ===
+        if input_mode == "risk_pct":
+            pct = value
 
-        # Получаем данные
-        data = await state.get_data()
+            # Валидация процента
+            is_valid, error = validate_risk_pct(pct)
+            if not is_valid:
+                await message.answer(f"⚠️ {error}")
+                return
+
+            # Получаем баланс
+            try:
+                equity, updated_data = await get_equity_cached(data, settings)
+                await state.update_data(**updated_data)
+            except ValueError as e:
+                await message.answer(f"⚠️ {e}")
+                return
+
+            # Рассчитываем риск
+            custom_risk = calc_risk_usd_from_pct(equity, pct)
+
+            # Валидация итогового риска
+            is_valid, error = validate_risk_usd(custom_risk, settings.max_risk_per_trade)
+            if not is_valid:
+                await message.answer(f"⚠️ {error}")
+                return
+
+            logger.info(f"User {user_id}: custom {pct}% of ${equity:.2f} = ${custom_risk:.2f}")
+
+        # === Режим USD ===
+        else:
+            custom_risk = value
+
+            if custom_risk < 1:
+                await message.answer("⚠️ Минимальный риск: $1")
+                return
+
+            if custom_risk > 500:
+                await message.answer("⚠️ Максимальный риск: $500")
+                return
+
+        # Получаем данные сценария
         scenarios = data.get("scenarios", [])
         scenario_index = data.get("selected_scenario_index", 0)
         scenario = scenarios[scenario_index]
         symbol = data.get("symbol", "BTCUSDT")
-
-        settings = await settings_storage.get_settings(user_id)
 
         # Используем leverage из сценария (если есть), иначе из settings
         leverage = _parse_leverage(scenario.get("leverage"), settings.default_leverage)
@@ -1219,10 +1298,16 @@ async def ai_custom_risk_process(message: Message, state: FSMContext, settings_s
         logger.info(f"User {user_id} set custom risk ${custom_risk:.2f} → ${adjusted_risk:.2f}")
 
     except ValueError:
-        await message.answer(
-            "⚠️ Неверный формат!\n\n"
-            "Введи число, например: <code>25</code> или <code>15.5</code>"
-        )
+        if input_mode == "risk_pct":
+            await message.answer(
+                "⚠️ Неверный формат!\n\n"
+                "Введи процент, например: <code>0.75</code> или <code>1.5</code>"
+            )
+        else:
+            await message.answer(
+                "⚠️ Неверный формат!\n\n"
+                "Введи число, например: <code>25</code> или <code>15.5</code>"
+            )
 
 
 @router.callback_query(AIScenarioStates.entering_custom_risk, F.data.startswith("ai:cancel_custom:"))
@@ -1237,6 +1322,7 @@ async def ai_custom_risk_cancel(callback: CallbackQuery, state: FSMContext):
     timeframe = data.get("timeframe", "")
     current_price = data.get("current_price", 0.0)
     market_context = data.get("market_context")
+    risk_mode = data.get("risk_mode", "usd")
 
     await state.set_state(AIScenarioStates.viewing_detail)
 
@@ -1244,7 +1330,8 @@ async def ai_custom_risk_cancel(callback: CallbackQuery, state: FSMContext):
     await show_scenario_detail(
         callback.message, scenario, scenario_index,
         symbol=symbol, timeframe=timeframe, current_price=current_price,
-        market_context=market_context, user_id=callback.from_user.id
+        market_context=market_context, user_id=callback.from_user.id,
+        risk_mode=risk_mode
     )
 
     await callback.answer("Отменено")
@@ -1301,6 +1388,86 @@ async def ai_trade_with_risk(callback: CallbackQuery, state: FSMContext, setting
     )
 
     await callback.answer()
+
+
+@router.callback_query(AIScenarioStates.viewing_detail, F.data.startswith("ai:trade_pct:"))
+async def ai_trade_with_risk_percent(callback: CallbackQuery, state: FSMContext, settings_storage):
+    """Пользователь выбрал процент риска - конвертировать в USD и показать подтверждение"""
+    # Парсинг: ai:trade_pct:0:0.5
+    parts = callback.data.split(":")
+    scenario_index = int(parts[2])
+    pct = float(parts[3])
+
+    data = await state.get_data()
+    scenarios = data.get("scenarios", [])
+    scenario = scenarios[scenario_index]
+    symbol = data.get("symbol", "BTCUSDT")
+
+    user_id = callback.from_user.id
+    settings = await settings_storage.get_settings(user_id)
+
+    # Валидация процента
+    is_valid, error = validate_risk_pct(pct)
+    if not is_valid:
+        await callback.answer(f"❌ {error}", show_alert=True)
+        return
+
+    # Получаем баланс из кэша
+    try:
+        equity, updated_data = await get_equity_cached(data, settings)
+        await state.update_data(**updated_data)
+    except ValueError as e:
+        await callback.answer(f"❌ {e}", show_alert=True)
+        return
+
+    # Рассчитываем risk_usd
+    base_risk_usd = calc_risk_usd_from_pct(equity, pct)
+
+    # Валидация итогового риска
+    max_risk = settings.max_risk_per_trade
+    is_valid, error = validate_risk_usd(base_risk_usd, max_risk)
+    if not is_valid:
+        await callback.answer(f"❌ {error}", show_alert=True)
+        return
+
+    logger.info(f"User {user_id}: AI trade {pct}% of ${equity:.2f} = ${base_risk_usd:.2f}")
+
+    # Используем leverage из сценария (если есть), иначе из settings
+    leverage = _parse_leverage(scenario.get("leverage"), settings.default_leverage)
+
+    # === CONFIDENCE-BASED RISK SCALING ===
+    confidence = scenario.get("confidence", 0.5)
+
+    # Применяем масштабирование если включено
+    adjusted_risk, multiplier = calculate_confidence_adjusted_risk(
+        base_risk=base_risk_usd,
+        confidence=confidence,
+        scaling_enabled=settings.confidence_risk_scaling
+    )
+
+    # Сохраняем оба значения в state
+    await state.update_data(
+        base_risk_usd=base_risk_usd,
+        risk_usd=adjusted_risk,
+        risk_percent=pct,
+        risk_multiplier=multiplier,
+        leverage=leverage
+    )
+    await state.set_state(AIScenarioStates.confirmation)
+
+    # Показать подтверждение с информацией о масштабировании
+    await show_trade_confirmation(
+        callback.message,
+        scenario,
+        symbol,
+        adjusted_risk,
+        leverage,
+        base_risk=base_risk_usd,
+        multiplier=multiplier,
+        scaling_enabled=settings.confidence_risk_scaling
+    )
+
+    await callback.answer(f"Риск: {pct}% = ${base_risk_usd:.2f}")
 
 
 async def show_trade_confirmation(
@@ -2432,6 +2599,7 @@ async def ai_change_risk_from_confirmation(callback: CallbackQuery, state: FSMCo
     timeframe = data.get("timeframe", "")
     current_price = data.get("current_price", 0.0)
     market_context = data.get("market_context")
+    risk_mode = data.get("risk_mode", "usd")
 
     await state.update_data(selected_scenario_index=scenario_index)
     await state.set_state(AIScenarioStates.viewing_detail)
@@ -2440,7 +2608,8 @@ async def ai_change_risk_from_confirmation(callback: CallbackQuery, state: FSMCo
     await show_scenario_detail(
         callback.message, scenario, scenario_index,
         symbol=symbol, timeframe=timeframe, current_price=current_price,
-        market_context=market_context, user_id=callback.from_user.id
+        market_context=market_context, user_id=callback.from_user.id,
+        risk_mode=risk_mode
     )
 
     await callback.answer()

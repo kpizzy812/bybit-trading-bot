@@ -160,24 +160,46 @@ def get_stop_percent_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_risk_keyboard() -> InlineKeyboardMarkup:
+def get_risk_keyboard(risk_mode: str = 'usd') -> InlineKeyboardMarkup:
     """
-    Клавиатура выбора риска
-    Пресеты: $5, $10, $15, Custom
-    + Опция Position Size (указать размер позиции напрямую)
+    Клавиатура выбора риска.
+
+    Args:
+        risk_mode: 'usd' для фиксированных сумм, 'percent' для % от баланса
+
+    USD mode (manual capital):
+        Пресеты: $5, $10, $15, Custom
+
+    Percent mode (auto capital):
+        Пресеты: 0.25%, 0.5%, 0.75%, 1%, 1.5%, 2%
     """
     builder = InlineKeyboardBuilder()
 
-    # Пресеты риска
-    builder.row(
-        InlineKeyboardButton(text="$5", callback_data="risk:5"),
-        InlineKeyboardButton(text="$10", callback_data="risk:10"),
-        InlineKeyboardButton(text="$15", callback_data="risk:15")
-    )
-
-    builder.row(
-        InlineKeyboardButton(text="💰 Custom Risk", callback_data="risk:custom")
-    )
+    if risk_mode == 'percent':
+        # Процентные пресеты (когда trading_capital_mode == 'auto')
+        builder.row(
+            InlineKeyboardButton(text="0.25%", callback_data="risk_pct:0.25"),
+            InlineKeyboardButton(text="0.5%", callback_data="risk_pct:0.5"),
+            InlineKeyboardButton(text="0.75%", callback_data="risk_pct:0.75")
+        )
+        builder.row(
+            InlineKeyboardButton(text="1%", callback_data="risk_pct:1"),
+            InlineKeyboardButton(text="1.5%", callback_data="risk_pct:1.5"),
+            InlineKeyboardButton(text="2%", callback_data="risk_pct:2")
+        )
+        builder.row(
+            InlineKeyboardButton(text="💰 Custom %", callback_data="risk_pct:custom")
+        )
+    else:
+        # USD пресеты (когда trading_capital_mode == 'manual')
+        builder.row(
+            InlineKeyboardButton(text="$5", callback_data="risk:5"),
+            InlineKeyboardButton(text="$10", callback_data="risk:10"),
+            InlineKeyboardButton(text="$15", callback_data="risk:15")
+        )
+        builder.row(
+            InlineKeyboardButton(text="💰 Custom Risk", callback_data="risk:custom")
+        )
 
     # Новая опция: указать размер позиции напрямую
     builder.row(
