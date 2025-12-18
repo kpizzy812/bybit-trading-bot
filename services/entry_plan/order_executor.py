@@ -293,18 +293,49 @@ async def setup_stop_loss(plan: EntryPlan) -> bool:
     """
     Установить Stop Loss для позиции.
 
+    Включает валидацию: SL должен быть ниже avg_entry для лонга,
+    выше avg_entry для шорта.
+
     Returns:
         True если SL установлен успешно
     """
     try:
         client = client_pool.get_client(plan.testnet)
 
+        stop_price = plan.stop_price
+        avg_entry = plan.avg_entry_price or 0
+
+        # Валидация: SL должен быть на правильной стороне от avg_entry
+        if avg_entry > 0 and stop_price > 0:
+            is_long = plan.side.lower() == "buy"
+
+            if is_long and stop_price >= avg_entry:
+                # SL выше или равен entry для лонга - это неправильно!
+                # Пересчитываем SL как entry - 1% (или используем risk distance)
+                risk_pct = 0.01  # 1% по умолчанию
+                new_sl = round(avg_entry * (1 - risk_pct), 2)
+                logger.warning(
+                    f"[{plan.symbol}] SL {stop_price} >= avg_entry {avg_entry} for LONG. "
+                    f"Auto-fixing SL to {new_sl} (-{risk_pct*100:.1f}%)"
+                )
+                stop_price = new_sl
+
+            elif not is_long and stop_price <= avg_entry:
+                # SL ниже или равен entry для шорта - это неправильно!
+                risk_pct = 0.01
+                new_sl = round(avg_entry * (1 + risk_pct), 2)
+                logger.warning(
+                    f"[{plan.symbol}] SL {stop_price} <= avg_entry {avg_entry} for SHORT. "
+                    f"Auto-fixing SL to {new_sl} (+{risk_pct*100:.1f}%)"
+                )
+                stop_price = new_sl
+
         await client.update_trading_stop(
             symbol=plan.symbol,
-            stop_loss=str(plan.stop_price)
+            stop_loss=str(stop_price)
         )
 
-        logger.info(f"SL set at ${plan.stop_price:.2f} for {plan.symbol}")
+        logger.info(f"SL set at ${stop_price:.2f} for {plan.symbol}")
         return True
 
     except Exception as e:
