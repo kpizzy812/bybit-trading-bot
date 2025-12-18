@@ -174,7 +174,7 @@ class PositionMonitor(BaseMonitor):
             return
 
         from services.supervisor_client import PositionSnapshot as SupervisorSnapshot
-        from bot.handlers.supervisor import send_advice_notification, cache_advice
+        from services.events import event_bus, SupervisorAdviceEvent
 
         for user_id in list(self.active_users):
             try:
@@ -226,12 +226,15 @@ class PositionMonitor(BaseMonitor):
                         positions=supervisor_snapshots
                     )
 
-                    # Send notifications for advice packs
+                    # Emit events for advice packs (handled by supervisor handler)
                     for advice in advice_packs:
                         # Check urgency threshold
                         urgency = advice.risk_state if hasattr(advice, 'risk_state') else 'low'
                         if self._should_notify(urgency):
-                            await send_advice_notification(self.bot, user_id, advice)
+                            await event_bus.emit(SupervisorAdviceEvent(
+                                user_id=user_id,
+                                advice=advice
+                            ))
 
             except Exception as e:
                 logger.warning(f"Supervisor sync error for user {user_id}: {e}")

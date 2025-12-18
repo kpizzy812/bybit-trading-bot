@@ -22,6 +22,7 @@ from aiogram.types import CallbackQuery
 
 from services.supervisor_client import get_supervisor_client, AdvicePack
 from services.bybit import BybitClient
+from services.events import event_bus, SupervisorAdviceEvent
 from bot.keyboards.supervisor_kb import (
     get_advice_keyboard,
     get_action_confirm_keyboard,
@@ -467,3 +468,40 @@ async def send_advice_notification(
     except Exception as e:
         logger.error(f"Failed to send advice notification: {e}")
         return None
+
+
+# ============================================================================
+# EVENT HANDLERS (called via event_bus from position_monitor)
+# ============================================================================
+
+# Bot instance for event handlers (set via setup_supervisor_events)
+_bot_instance = None
+
+
+def setup_supervisor_events(bot):
+    """
+    Initialize event handlers with bot instance.
+
+    Call this from main.py after creating bot:
+        from bot.handlers.supervisor import setup_supervisor_events
+        setup_supervisor_events(bot)
+    """
+    global _bot_instance
+    _bot_instance = bot
+
+    # Register event handler
+    event_bus.subscribe(SupervisorAdviceEvent, _handle_supervisor_advice_event)
+    logger.info("Supervisor event handlers registered")
+
+
+async def _handle_supervisor_advice_event(event: SupervisorAdviceEvent):
+    """Handle SupervisorAdviceEvent from position_monitor"""
+    if _bot_instance is None:
+        logger.warning("Bot instance not set, skipping advice notification")
+        return
+
+    await send_advice_notification(
+        bot=_bot_instance,
+        user_id=event.user_id,
+        advice=event.advice
+    )

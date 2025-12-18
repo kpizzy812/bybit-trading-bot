@@ -228,6 +228,8 @@ async def main():
     # Supervisor handlers (если включено)
     if config.SUPERVISOR_ENABLED:
         dp.include_router(supervisor_handler.router)
+        # Setup event handlers for supervisor advice notifications
+        supervisor_handler.setup_supervisor_events(bot)
         logger.info("🧠 Supervisor handlers registered")
 
     # Запуск бота
