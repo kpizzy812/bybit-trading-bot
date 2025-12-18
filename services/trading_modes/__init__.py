@@ -43,6 +43,12 @@ from services.trading_modes.safety_checker import (
     SafetyChecker,
     get_safety_checker,
 )
+from services.trading_modes.risk_adjuster import (
+    RiskAdjuster,
+    get_risk_adjuster,
+    adjust_risk_for_mode,
+    get_leverage_for_mode,
+)
 
 __all__ = [
     # Models
@@ -70,4 +76,9 @@ __all__ = [
     # Safety Checker
     "SafetyChecker",
     "get_safety_checker",
+    # Risk Adjuster
+    "RiskAdjuster",
+    "get_risk_adjuster",
+    "adjust_risk_for_mode",
+    "get_leverage_for_mode",
 ]
