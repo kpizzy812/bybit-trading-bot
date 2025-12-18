@@ -34,6 +34,7 @@ from services.entry_plan import EntryPlan, EntryOrder
 from services.scenarios_cache import get_scenarios_cache
 from services.charts import get_chart_generator
 from services.real_ev import get_gate_checker, GateStatus
+from services.trading_modes import get_mode_registry, MEME_SYMBOLS
 from utils.validators import round_qty, round_price
 
 # Импорт утилит
@@ -47,7 +48,7 @@ router = Router()
 
 @router.message(Command("ai_scenarios"))
 @router.message(F.text == "🤖 AI Сценарии")
-async def ai_scenarios_start(message: Message, state: FSMContext):
+async def ai_scenarios_start(message: Message, state: FSMContext, settings_storage):
     """Начало AI Scenarios flow - выбор символа"""
 
     # Проверка включены ли AI сценарии
@@ -59,6 +60,13 @@ async def ai_scenarios_start(message: Message, state: FSMContext):
         return
 
     user_id = message.from_user.id
+
+    # Получить текущий trading mode из settings
+    settings = await settings_storage.get_settings(user_id)
+    current_mode = settings.default_trading_mode
+
+    # Сохраняем mode в state
+    await state.update_data(trading_mode=current_mode)
 
     # Получить закэшированные пары
     cache = get_scenarios_cache()
@@ -75,9 +83,14 @@ async def ai_scenarios_start(message: Message, state: FSMContext):
 
     await state.set_state(AIScenarioStates.choosing_symbol)
 
+    # Получаем mode info для header
+    registry = get_mode_registry()
+    mode = registry.get_or_default(current_mode)
+
     # Формируем текст
     text = (
-        "🤖 <b>AI Trading Scenarios</b>\n\n"
+        f"🤖 <b>AI Trading Scenarios</b>\n"
+        f"{mode.emoji} Mode: <b>{mode.name}</b>\n\n"
         "Syntra AI проанализирует рынок и предложит торговые сценарии "
         "с конкретными уровнями входа, стопа и целей.\n\n"
     )
@@ -87,9 +100,147 @@ async def ai_scenarios_start(message: Message, state: FSMContext):
 
     text += "📊 Выбери символ и таймфрейм для анализа:"
 
+    # Определяем meme_symbols для MEME режима
+    meme_symbols = MEME_SYMBOLS if current_mode == "meme" else None
+
     await message.answer(
         text,
-        reply_markup=ai_scenarios_kb.get_symbols_keyboard(cached_pairs)
+        reply_markup=ai_scenarios_kb.get_symbols_keyboard(
+            cached_pairs,
+            current_mode=current_mode,
+            meme_symbols=meme_symbols
+        )
+    )
+
+
+@router.callback_query(AIScenarioStates.choosing_symbol, F.data == "ai:mode:toggle")
+async def ai_mode_toggle(callback: CallbackQuery, state: FSMContext):
+    """Показать меню выбора trading mode"""
+    data = await state.get_data()
+    current_mode = data.get("trading_mode", "standard")
+
+    registry = get_mode_registry()
+    mode = registry.get_or_default(current_mode)
+
+    text = (
+        f"⚙️ <b>Выбор Trading Mode</b>\n\n"
+        f"Текущий: {mode.emoji} <b>{mode.name}</b>\n\n"
+        f"🛡️ <b>Conservative</b> - низкий риск, строгие условия\n"
+        f"⚖️ <b>Standard</b> - сбалансированный режим\n"
+        f"🔥 <b>High Risk</b> - высокое плечо, тесные стопы\n"
+        f"🚀 <b>Meme</b> - для волатильных мемкоинов\n"
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=ai_scenarios_kb.get_mode_toggle_keyboard(current_mode)
+    )
+    await callback.answer()
+
+
+@router.callback_query(AIScenarioStates.choosing_symbol, F.data.startswith("ai:mode:"))
+async def ai_mode_selected(callback: CallbackQuery, state: FSMContext, settings_storage):
+    """Выбор нового trading mode"""
+    mode_id = callback.data.split(":")[2]
+
+    # Проверка на back
+    if mode_id == "back":
+        # Возврат к выбору символа
+        user_id = callback.from_user.id
+        data = await state.get_data()
+        current_mode = data.get("trading_mode", "standard")
+
+        cache = get_scenarios_cache()
+        cached_pairs_raw = cache.get_user_cached_pairs(user_id)
+        cached_pairs = []
+        for symbol, timeframe, cached_at in cached_pairs_raw:
+            age_mins = int((datetime.utcnow() - cached_at).total_seconds() / 60)
+            cached_pairs.append((symbol, timeframe, age_mins))
+        cached_pairs.sort(key=lambda x: x[2])
+
+        registry = get_mode_registry()
+        mode = registry.get_or_default(current_mode)
+
+        text = (
+            f"🤖 <b>AI Trading Scenarios</b>\n"
+            f"{mode.emoji} Mode: <b>{mode.name}</b>\n\n"
+            "📊 Выбери символ и таймфрейм для анализа:"
+        )
+
+        meme_symbols = MEME_SYMBOLS if current_mode == "meme" else None
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=ai_scenarios_kb.get_symbols_keyboard(
+                cached_pairs,
+                current_mode=current_mode,
+                meme_symbols=meme_symbols
+            )
+        )
+        await callback.answer()
+        return
+
+    # Валидация mode_id
+    registry = get_mode_registry()
+    if not registry.is_valid_mode(mode_id):
+        await callback.answer("❌ Неизвестный режим", show_alert=True)
+        return
+
+    user_id = callback.from_user.id
+
+    # Сохраняем в user_settings (persistent)
+    await settings_storage.update_setting(user_id, "default_trading_mode", mode_id)
+
+    # Сохраняем в state (session)
+    await state.update_data(trading_mode=mode_id)
+
+    mode = registry.get(mode_id)
+
+    # Показать предупреждение для high_risk/meme
+    warning = ""
+    if mode_id == "high_risk":
+        warning = (
+            "\n\n⚠️ <b>HIGH RISK MODE:</b>\n"
+            "• Leverage до 50x\n"
+            "• Тесные стопы (0.8-1.5x ATR)\n"
+            "• Быстрая реакция на инвалидацию\n"
+            "<i>Подходит для опытных трейдеров!</i>"
+        )
+    elif mode_id == "meme":
+        warning = (
+            "\n\n⚠️ <b>MEME MODE:</b>\n"
+            "• Только whitelist символов (DOGE, SHIB, PEPE...)\n"
+            "• Широкие стопы (2-5x ATR)\n"
+            "• Уменьшенный размер позиции\n"
+            "<i>Высокая волатильность!</i>"
+        )
+
+    await callback.answer(f"✅ Mode: {mode.name}")
+
+    # Возврат к выбору символа с новым mode
+    cache = get_scenarios_cache()
+    cached_pairs_raw = cache.get_user_cached_pairs(user_id)
+    cached_pairs = []
+    for symbol, timeframe, cached_at in cached_pairs_raw:
+        age_mins = int((datetime.utcnow() - cached_at).total_seconds() / 60)
+        cached_pairs.append((symbol, timeframe, age_mins))
+    cached_pairs.sort(key=lambda x: x[2])
+
+    text = (
+        f"🤖 <b>AI Trading Scenarios</b>\n"
+        f"{mode.emoji} Mode: <b>{mode.name}</b>{warning}\n\n"
+        "📊 Выбери символ и таймфрейм для анализа:"
+    )
+
+    meme_symbols = MEME_SYMBOLS if mode_id == "meme" else None
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=ai_scenarios_kb.get_symbols_keyboard(
+            cached_pairs,
+            current_mode=mode_id,
+            meme_symbols=meme_symbols
+        )
     )
 
 

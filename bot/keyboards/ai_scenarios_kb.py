@@ -5,24 +5,70 @@ Inline клавиатуры для работы с торговыми сцена
 """
 from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+from services.trading_modes import get_mode_registry, ALL_MODES
+
+
+def get_mode_toggle_keyboard(current_mode: str = "standard") -> InlineKeyboardMarkup:
+    """
+    Клавиатура выбора trading mode.
+
+    Args:
+        current_mode: Текущий режим (conservative, standard, high_risk, meme)
+
+    Returns:
+        InlineKeyboardMarkup с режимами
+    """
+    builder = InlineKeyboardBuilder()
+    registry = get_mode_registry()
+
+    for mode_id in ["conservative", "standard", "high_risk", "meme"]:
+        mode = registry.get(mode_id)
+        is_current = mode_id == current_mode
+        check = "✓ " if is_current else ""
+        builder.button(
+            text=f"{check}{mode.emoji} {mode.name}",
+            callback_data=f"ai:mode:{mode_id}"
+        )
+
+    builder.button(text="🔙 Назад", callback_data="ai:mode:back")
+    builder.adjust(2, 2, 1)
+
+    return builder.as_markup()
 
 
 def get_symbols_keyboard(
-    cached_pairs: list[tuple[str, str, int]] = None
+    cached_pairs: list[tuple[str, str, int]] = None,
+    current_mode: str = "standard",
+    meme_symbols: Optional[list] = None,
 ) -> InlineKeyboardMarkup:
     """
     Клавиатура выбора символа для AI анализа.
 
     Args:
         cached_pairs: Список (symbol, timeframe, age_mins) закэшированных пар
+        current_mode: Текущий trading mode
+        meme_symbols: Whitelist символов для MEME режима
     """
     builder = InlineKeyboardBuilder()
     rows = []
+    registry = get_mode_registry()
+    mode = registry.get_or_default(current_mode)
+
+    # Mode toggle кнопка в header
+    builder.button(
+        text=f"{mode.emoji} Mode: {mode.name} ▼",
+        callback_data="ai:mode:toggle"
+    )
+    rows.append(1)
 
     # Показать закэшированные пары если есть
     if cached_pairs:
         for symbol, timeframe, age_mins in cached_pairs[:3]:  # Макс 3 пары
+            # Для MEME режима - только whitelist символы
+            if current_mode == "meme" and meme_symbols and symbol not in meme_symbols:
+                continue
             coin = symbol.replace("USDT", "")
             if age_mins < 60:
                 age_str = f"{age_mins}m"
@@ -32,15 +78,24 @@ def get_symbols_keyboard(
                 text=f"📦 {coin} {timeframe} ({age_str})",
                 callback_data=f"ai:analyze:{symbol}:{timeframe}"
             )
-        rows.append(len(cached_pairs[:3]))
+        if cached_pairs:
+            rows.append(min(len(cached_pairs), 3))
 
-    # Основные символы
-    builder.button(text="BTC", callback_data="ai:symbol:BTCUSDT")
-    builder.button(text="ETH", callback_data="ai:symbol:ETHUSDT")
-    builder.button(text="SOL", callback_data="ai:symbol:SOLUSDT")
-    builder.button(text="BNB", callback_data="ai:symbol:BNBUSDT")
-    builder.button(text="HYPE", callback_data="ai:symbol:HYPEUSDT")
-    rows.extend([2, 2, 1])
+    # Символы в зависимости от режима
+    if current_mode == "meme" and meme_symbols:
+        # Только MEME символы
+        for symbol in meme_symbols[:6]:
+            coin = symbol.replace("USDT", "")
+            builder.button(text=coin, callback_data=f"ai:symbol:{symbol}")
+        rows.extend([3, 3] if len(meme_symbols) > 3 else [len(meme_symbols)])
+    else:
+        # Основные символы
+        builder.button(text="BTC", callback_data="ai:symbol:BTCUSDT")
+        builder.button(text="ETH", callback_data="ai:symbol:ETHUSDT")
+        builder.button(text="SOL", callback_data="ai:symbol:SOLUSDT")
+        builder.button(text="BNB", callback_data="ai:symbol:BNBUSDT")
+        builder.button(text="HYPE", callback_data="ai:symbol:HYPEUSDT")
+        rows.extend([2, 2, 1])
 
     # Выбор таймфрейма
     builder.button(text="⏰ 1H", callback_data="ai:timeframe:1h")
