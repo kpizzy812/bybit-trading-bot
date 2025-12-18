@@ -307,7 +307,7 @@ async def setup_stop_loss(plan: EntryPlan) -> bool:
 
         # Валидация: SL должен быть на правильной стороне от avg_entry
         if avg_entry > 0 and stop_price > 0:
-            is_long = plan.side.lower() == "buy"
+            is_long = plan.side.lower() == "long"
 
             if is_long and stop_price >= avg_entry:
                 # SL выше или равен entry для лонга - это неправильно!
