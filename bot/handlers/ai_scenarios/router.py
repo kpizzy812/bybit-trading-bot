@@ -36,6 +36,8 @@ from services.charts import get_chart_generator
 from services.real_ev import get_gate_checker, GateStatus
 from services.trading_modes import get_mode_registry, MEME_SYMBOLS
 from services.trading_modes.safety_checker import get_safety_checker, SafetyCheckResult
+from services.supervisor_client import SupervisorClient
+from services.universe import get_universe_service, MAJOR_SYMBOLS
 from utils.validators import round_qty, round_price
 
 # Импорт утилит
@@ -46,6 +48,57 @@ from bot.handlers.ai_scenarios.utils import (
 )
 
 router = Router()
+
+
+async def _get_symbols_keyboard(
+    user_id: int,
+    current_mode: str,
+    current_category: str = "trending",
+    bybit_client: BybitClient = None,
+):
+    """
+    Хелпер для получения клавиатуры символов.
+
+    Пытается использовать динамическую клавиатуру с Universe,
+    fallback на статическую если Universe недоступен.
+    """
+    # Получить закэшированные пары
+    cache = get_scenarios_cache()
+    cached_pairs_raw = cache.get_user_cached_pairs(user_id)
+    cached_pairs = []
+    for symbol, timeframe, cached_at in cached_pairs_raw:
+        age_mins = int((datetime.utcnow() - cached_at).total_seconds() / 60)
+        cached_pairs.append((symbol, timeframe, age_mins))
+    cached_pairs.sort(key=lambda x: x[2])
+
+    # Попробовать получить динамические символы
+    try:
+        universe_service = get_universe_service(bybit_client)
+        dynamic_symbols = await universe_service.get_symbols_with_metrics(
+            mode=current_mode,
+            category=current_category,
+            limit=5
+        )
+
+        if dynamic_symbols:
+            # Используем динамическую клавиатуру
+            return ai_scenarios_kb.get_dynamic_symbols_keyboard(
+                dynamic_symbols=dynamic_symbols,
+                current_mode=current_mode,
+                current_category=current_category,
+                cached_pairs=cached_pairs,
+            )
+    except Exception as e:
+        logger.warning(f"Failed to get dynamic symbols, using fallback: {e}")
+
+    # Fallback на статическую клавиатуру
+    meme_symbols = MEME_SYMBOLS if current_mode == "meme" else None
+    return ai_scenarios_kb.get_symbols_keyboard(
+        cached_pairs,
+        current_mode=current_mode,
+        meme_symbols=meme_symbols
+    )
+
 
 @router.message(Command("ai_scenarios"))
 @router.message(F.text == "🤖 AI Сценарии")
@@ -65,23 +118,10 @@ async def ai_scenarios_start(message: Message, state: FSMContext, settings_stora
     # Получить текущий trading mode из settings
     settings = await settings_storage.get_settings(user_id)
     current_mode = settings.default_trading_mode
+    current_category = "trending"
 
-    # Сохраняем mode в state
-    await state.update_data(trading_mode=current_mode)
-
-    # Получить закэшированные пары
-    cache = get_scenarios_cache()
-    cached_pairs_raw = cache.get_user_cached_pairs(user_id)
-
-    # Конвертировать в формат (symbol, timeframe, age_mins)
-    cached_pairs = []
-    for symbol, timeframe, cached_at in cached_pairs_raw:
-        age_mins = int((datetime.utcnow() - cached_at).total_seconds() / 60)
-        cached_pairs.append((symbol, timeframe, age_mins))
-
-    # Сортировать по времени (самые свежие первыми)
-    cached_pairs.sort(key=lambda x: x[2])
-
+    # Сохраняем mode и category в state
+    await state.update_data(trading_mode=current_mode, category=current_category)
     await state.set_state(AIScenarioStates.choosing_symbol)
 
     # Получаем mode info для header
@@ -94,24 +134,13 @@ async def ai_scenarios_start(message: Message, state: FSMContext, settings_stora
         f"{mode.emoji} Mode: <b>{mode.name}</b>\n\n"
         "Syntra AI проанализирует рынок и предложит торговые сценарии "
         "с конкретными уровнями входа, стопа и целей.\n\n"
+        "📊 Выбери символ и таймфрейм для анализа:"
     )
 
-    if cached_pairs:
-        text += "📦 <b>Сохранённые сценарии:</b> (нажми для просмотра)\n\n"
+    # Получить клавиатуру (динамическую или статическую)
+    keyboard = await _get_symbols_keyboard(user_id, current_mode, current_category)
 
-    text += "📊 Выбери символ и таймфрейм для анализа:"
-
-    # Определяем meme_symbols для MEME режима
-    meme_symbols = MEME_SYMBOLS if current_mode == "meme" else None
-
-    await message.answer(
-        text,
-        reply_markup=ai_scenarios_kb.get_symbols_keyboard(
-            cached_pairs,
-            current_mode=current_mode,
-            meme_symbols=meme_symbols
-        )
-    )
+    await message.answer(text, reply_markup=keyboard)
 
 
 @router.callback_query(AIScenarioStates.choosing_symbol, F.data == "ai:mode:toggle")
@@ -150,14 +179,7 @@ async def ai_mode_selected(callback: CallbackQuery, state: FSMContext, settings_
         user_id = callback.from_user.id
         data = await state.get_data()
         current_mode = data.get("trading_mode", "standard")
-
-        cache = get_scenarios_cache()
-        cached_pairs_raw = cache.get_user_cached_pairs(user_id)
-        cached_pairs = []
-        for symbol, timeframe, cached_at in cached_pairs_raw:
-            age_mins = int((datetime.utcnow() - cached_at).total_seconds() / 60)
-            cached_pairs.append((symbol, timeframe, age_mins))
-        cached_pairs.sort(key=lambda x: x[2])
+        current_category = data.get("category", "trending")
 
         registry = get_mode_registry()
         mode = registry.get_or_default(current_mode)
@@ -168,16 +190,8 @@ async def ai_mode_selected(callback: CallbackQuery, state: FSMContext, settings_
             "📊 Выбери символ и таймфрейм для анализа:"
         )
 
-        meme_symbols = MEME_SYMBOLS if current_mode == "meme" else None
-
-        await callback.message.edit_text(
-            text,
-            reply_markup=ai_scenarios_kb.get_symbols_keyboard(
-                cached_pairs,
-                current_mode=current_mode,
-                meme_symbols=meme_symbols
-            )
-        )
+        keyboard = await _get_symbols_keyboard(user_id, current_mode, current_category)
+        await callback.message.edit_text(text, reply_markup=keyboard)
         await callback.answer()
         return
 
@@ -233,16 +247,53 @@ async def ai_mode_selected(callback: CallbackQuery, state: FSMContext, settings_
         "📊 Выбери символ и таймфрейм для анализа:"
     )
 
-    meme_symbols = MEME_SYMBOLS if mode_id == "meme" else None
+    # Получить клавиатуру
+    data = await state.get_data()
+    current_category = data.get("category", "trending")
+    keyboard = await _get_symbols_keyboard(user_id, mode_id, current_category)
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=ai_scenarios_kb.get_symbols_keyboard(
-            cached_pairs,
-            current_mode=mode_id,
-            meme_symbols=meme_symbols
-        )
+    await callback.message.edit_text(text, reply_markup=keyboard)
+
+
+@router.callback_query(AIScenarioStates.choosing_symbol, F.data.startswith("ai:cat:"))
+async def ai_category_selected(callback: CallbackQuery, state: FSMContext):
+    """Переключение категории символов (Popular, Pumping, Dumping, Volatile)"""
+    parts = callback.data.split(":")
+    # ai:cat:pumping:standard
+    category = parts[2]
+    mode_id = parts[3] if len(parts) > 3 else "standard"
+
+    user_id = callback.from_user.id
+
+    # Сохраняем категорию в state
+    await state.update_data(category=category)
+
+    # Получаем mode info
+    registry = get_mode_registry()
+    mode = registry.get_or_default(mode_id)
+
+    # Формируем текст с категорией
+    category_labels = {
+        "trending": "🌊 Trending",
+        "popular": "📊 Popular (по объёму)",
+        "pumping": "🔥 Pumping (растут)",
+        "dumping": "🧊 Dumping (падают)",
+        "volatile": "⚡ Volatile (волатильные)",
+    }
+    category_label = category_labels.get(category, "🌊 Trending")
+
+    text = (
+        f"🤖 <b>AI Trading Scenarios</b>\n"
+        f"{mode.emoji} Mode: <b>{mode.name}</b>\n"
+        f"{category_label}\n\n"
+        "📊 Выбери символ и таймфрейм для анализа:"
     )
+
+    # Получить клавиатуру с новой категорией
+    keyboard = await _get_symbols_keyboard(user_id, mode_id, category)
+
+    await callback.message.edit_text(text, reply_markup=keyboard)
+    await callback.answer(category_label)
 
 
 @router.callback_query(AIScenarioStates.choosing_symbol, F.data.startswith("ai:symbol:"))
@@ -541,12 +592,15 @@ async def show_scenarios_list(
         ev_metrics = scenario.get("ev_metrics") or {}
         ev_grade = ev_metrics.get("ev_grade", "")
         ev_r = ev_metrics.get("ev_r")
+        ev_flags = ev_metrics.get("flags", [])
         ev_info = ""
         if ev_grade:
             grade_emoji = {"A": "🅰️", "B": "🅱️", "C": "©️", "D": "🅳"}.get(ev_grade, "")
             ev_info = f" {grade_emoji}"
             if ev_r is not None:
                 ev_info += f" EV:{ev_r:+.2f}R"
+            if "tp1_rr_penalty_zone" in ev_flags:
+                ev_info += " ⚠️"
 
         # Class warning
         class_warning = scenario.get("class_warning")
@@ -583,10 +637,21 @@ async def show_scenarios_list(
 
     text += "📌 Выбери сценарий для деталей:"
 
-    await message.edit_text(
-        text,
-        reply_markup=ai_scenarios_kb.get_scenarios_keyboard(scenarios)
-    )
+    # Пробуем edit, если не получится (медиа-сообщение) - удаляем и отправляем новое
+    try:
+        await message.edit_text(
+            text,
+            reply_markup=ai_scenarios_kb.get_scenarios_keyboard(scenarios)
+        )
+    except Exception:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.answer(
+            text,
+            reply_markup=ai_scenarios_kb.get_scenarios_keyboard(scenarios)
+        )
 
 
 @router.callback_query(AIScenarioStates.viewing_scenarios, F.data.startswith("ai:scenario:"))
@@ -758,16 +823,23 @@ async def show_scenario_detail(
     ev_text = ""
     if ev_metrics:
         ev_r = ev_metrics.get("ev_r")
+        ev_r_after_tp1 = ev_metrics.get("ev_r_after_tp1")
         ev_grade = ev_metrics.get("ev_grade", "")
         scenario_score = ev_metrics.get("scenario_score")
+        ev_flags = ev_metrics.get("flags", [])
 
         grade_emoji = {"A": "🅰️", "B": "🅱️", "C": "©️", "D": "🅳"}.get(ev_grade, "")
         ev_text = f"\n📈 <b>Expected Value:</b> {grade_emoji} Grade {ev_grade}"
         if ev_r is not None:
             ev_color = "+" if ev_r >= 0 else ""
             ev_text += f" | EV: {ev_color}{ev_r:.2f}R"
+        if ev_r_after_tp1 is not None and ev_r_after_tp1 != 0:
+            ev_text += f" | after_TP1: {ev_r_after_tp1:+.2f}R"
         if scenario_score is not None:
             ev_text += f" | Score: {scenario_score:.0f}"
+        # Показываем флаги penalty/adjusted
+        if "tp1_rr_penalty_zone" in ev_flags:
+            ev_text += " ⚠️<i>RR penalty</i>"
         ev_text += "\n"
 
     # === OUTCOME PROBS ===
@@ -1236,10 +1308,22 @@ async def show_trade_confirmation(
 <i>⚠️ Проверь все параметры перед подтверждением!</i>
 """
 
-    await message.edit_text(
-        card,
-        reply_markup=ai_scenarios_kb.get_confirm_trade_keyboard(0, risk_usd)  # scenario_index уже в state
-    )
+    # Пробуем edit, если не получится (медиа-сообщение) - удаляем и отправляем новое
+    try:
+        await message.edit_text(
+            card,
+            reply_markup=ai_scenarios_kb.get_confirm_trade_keyboard(0, risk_usd)
+        )
+    except Exception:
+        # Сообщение с графиком - удаляем и отправляем новое
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.answer(
+            card,
+            reply_markup=ai_scenarios_kb.get_confirm_trade_keyboard(0, risk_usd)
+        )
 
 
 async def show_trade_confirmation_message(
@@ -1606,6 +1690,22 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
                 )
                 await trade_logger.log_trade(trade_record)
                 logger.info(f"Trade record created for entry_plan: {trade_id}")
+
+                # Register scenario with Supervisor for position monitoring
+                try:
+                    supervisor = SupervisorClient()
+                    await supervisor.register_trade(
+                        trade_id=trade_id,
+                        user_id=user_id,
+                        symbol=symbol,
+                        timeframe=data.get("timeframe", "1h"),
+                        side=side,
+                        scenario_data=scenario
+                    )
+                    logger.info(f"Scenario registered with supervisor: {trade_id}")
+                except Exception as sup_error:
+                    logger.warning(f"Failed to register with supervisor (non-critical): {sup_error}")
+
             except Exception as log_error:
                 logger.error(f"Failed to create trade record: {log_error}")
 
@@ -1978,11 +2078,16 @@ async def ai_back_to_list(callback: CallbackQuery, state: FSMContext):
     if not scenarios:
         # Нет сценариев - вернуть к выбору символа
         await state.set_state(AIScenarioStates.choosing_symbol)
-        await callback.message.edit_text(
-            "🤖 <b>AI Trading Scenarios</b>\n\n"
-            "📊 Выбери символ и таймфрейм для анализа:",
-            reply_markup=ai_scenarios_kb.get_symbols_keyboard()
-        )
+        text = "🤖 <b>AI Trading Scenarios</b>\n\n📊 Выбери символ и таймфрейм для анализа:"
+        kb = ai_scenarios_kb.get_symbols_keyboard()
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(text, reply_markup=kb)
     else:
         # Показать список сценариев с market_context
         await state.set_state(AIScenarioStates.viewing_scenarios)

@@ -306,3 +306,15 @@ ALL_MODES = {
 }
 
 DEFAULT_MODE = "standard"
+
+
+# ============================================================
+# UNIVERSE LIMITS (для динамического выбора символов)
+# Полная конфигурация в services/universe/models.py
+# ============================================================
+UNIVERSE_MODE_SETTINGS = {
+    "conservative": {"top_n": 50, "max_change_pct": 25.0},
+    "standard": {"top_n": 100},
+    "high_risk": {"top_n": 200},
+    "meme": {"whitelist_only": True},
+}

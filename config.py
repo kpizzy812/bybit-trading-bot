@@ -1,7 +1,9 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Явно указываем путь к .env относительно этого файла
+load_dotenv(Path(__file__).parent / '.env')
 
 
 # ============================================================
@@ -146,19 +148,26 @@ if LOG_LEVEL not in VALID_LOG_LEVELS:
 # SUPPORTED SYMBOLS
 # ============================================================
 
-SUPPORTED_SYMBOLS = [
+# Major symbols (основные, всегда доступны как "якорь")
+# Остальные символы подтягиваются динамически через UniverseService
+MAJOR_SYMBOLS = [
     'BTCUSDT',
     'ETHUSDT',
     'SOLUSDT',
     'BNBUSDT',
-    'HYPEUSDT'
 ]
+
+# Legacy: для обратной совместимости с Trade Wizard
+SUPPORTED_SYMBOLS = MAJOR_SYMBOLS + ['HYPEUSDT']
 
 # Set для быстрой проверки: if symbol in SUPPORTED_SYMBOLS_SET
 SUPPORTED_SYMBOLS_SET = set(SUPPORTED_SYMBOLS)
 
 # Строка для отображения пользователю
 SUPPORTED_SYMBOLS_DISPLAY = ", ".join(SUPPORTED_SYMBOLS)
+
+# NOTE: Динамический выбор символов реализован в services/universe/
+# AI Scenarios использует UniverseService для получения топовых монет
 
 
 # ============================================================

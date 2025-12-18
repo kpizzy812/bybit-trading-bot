@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import Dict, List, Optional
 import config
 from .client import BybitError
 
@@ -145,3 +145,75 @@ class MarketDataMixin:
         except Exception as e:
             logger.error(f"Error getting klines for {symbol}: {e}")
             raise BybitError(f"Failed to get klines: {str(e)}")
+
+    async def get_all_tickers(self) -> List[Dict]:
+        """
+        Получить тикеры ВСЕХ инструментов (без symbol).
+
+        Returns:
+            List[Dict]: Список тикеров с полями:
+                - symbol: Символ (BTCUSDT)
+                - lastPrice: Последняя цена
+                - price24hPcnt: Изменение за 24h (доля, не %)
+                - highPrice24h, lowPrice24h: Диапазон 24h
+                - turnover24h: Объём в USD за 24h
+                - volume24h: Объём в базовой валюте
+                - bid1Price, ask1Price: Лучшие bid/ask
+        """
+        try:
+            response = self.client.get_tickers(
+                category=config.BYBIT_CATEGORY
+                # Без symbol = все тикеры
+            )
+            result = self._handle_response(response)
+            return result.get('list', [])
+
+        except BybitError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting all tickers: {e}")
+            raise BybitError(f"Failed to get all tickers: {str(e)}")
+
+    async def get_all_instruments(
+        self,
+        status: Optional[str] = "Trading",
+        quote_coin: Optional[str] = "USDT"
+    ) -> List[Dict]:
+        """
+        Получить все инструменты с фильтрацией.
+
+        Args:
+            status: Фильтр по статусу (Trading, Settling, Closed)
+            quote_coin: Фильтр по quote валюте (USDT, USDC)
+
+        Returns:
+            List[Dict]: Список инструментов с полями:
+                - symbol: Символ
+                - status: Статус (Trading)
+                - quoteCoin: Quote валюта (USDT)
+                - baseCoin: Base валюта (BTC)
+                - contractType: Тип (LinearPerpetual)
+                - lotSizeFilter, priceFilter, leverageFilter
+        """
+        try:
+            response = self.client.get_instruments_info(
+                category=config.BYBIT_CATEGORY
+                # Без symbol = все инструменты
+            )
+            result = self._handle_response(response)
+            instruments = result.get('list', [])
+
+            # Фильтрация
+            if status:
+                instruments = [i for i in instruments if i.get('status') == status]
+            if quote_coin:
+                instruments = [i for i in instruments if i.get('quoteCoin') == quote_coin]
+
+            logger.info(f"Fetched {len(instruments)} instruments (status={status}, quote={quote_coin})")
+            return instruments
+
+        except BybitError:
+            raise
+        except Exception as e:
+            logger.error(f"Error getting all instruments: {e}")
+            raise BybitError(f"Failed to get all instruments: {str(e)}")

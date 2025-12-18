@@ -8,6 +8,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from typing import List, Dict, Any, Optional
 
 from services.trading_modes import get_mode_registry, ALL_MODES
+from services.universe import SymbolMetrics, MAJOR_SYMBOLS, CATEGORY_LABELS
 
 
 def get_mode_toggle_keyboard(current_mode: str = "standard") -> InlineKeyboardMarkup:
@@ -104,6 +105,170 @@ def get_symbols_keyboard(
     rows.append(3)
 
     builder.adjust(*rows)
+
+    return builder.as_markup()
+
+
+def get_dynamic_symbols_keyboard(
+    dynamic_symbols: List[SymbolMetrics],
+    current_mode: str = "standard",
+    current_category: str = "trending",
+    cached_pairs: list[tuple[str, str, int]] = None,
+) -> InlineKeyboardMarkup:
+    """
+    Динамическая клавиатура выбора символа с категориями.
+
+    Args:
+        dynamic_symbols: Список символов из UniverseService
+        current_mode: Текущий trading mode
+        current_category: Текущая категория (trending, popular, pumping, dumping, volatile)
+        cached_pairs: Закэшированные пары для быстрого доступа
+
+    UI Layout:
+        ┌─────────────────────────────────────┐
+        │ 📊 Mode: Standard ▼                 │
+        ├─────────────────────────────────────┤
+        │ 🌊 Trending                         │
+        ├─────────────────────────────────────┤
+        │ [SUI +12%] [PEPE +8%] [WIF +6%]    │
+        ├─────────────────────────────────────┤
+        │ [BTC] [ETH] [SOL] [BNB]            │
+        ├─────────────────────────────────────┤
+        │ [📊 Pop] [🔥 Pump] [🧊 Dump] [⚡ Vol]│
+        ├─────────────────────────────────────┤
+        │ [⏰ 1H] [⏰ 4H] [⏰ 1D]             │
+        └─────────────────────────────────────┘
+    """
+    builder = InlineKeyboardBuilder()
+    rows = []
+    registry = get_mode_registry()
+    mode = registry.get_or_default(current_mode)
+
+    # Row 1: Mode toggle
+    builder.button(
+        text=f"{mode.emoji} Mode: {mode.name} ▼",
+        callback_data="ai:mode:toggle"
+    )
+    rows.append(1)
+
+    # Row 2: Current category label
+    category_label = CATEGORY_LABELS.get(current_category, "🌊 Trending")
+    builder.button(
+        text=category_label,
+        callback_data="ai:noop"  # Just a label, not clickable
+    )
+    rows.append(1)
+
+    # Row 3: Cached pairs (if any)
+    if cached_pairs:
+        cached_count = 0
+        for symbol, timeframe, age_mins in cached_pairs[:2]:  # Max 2 cached
+            coin = symbol.replace("USDT", "")
+            age_str = f"{age_mins}m" if age_mins < 60 else f"{age_mins // 60}h"
+            builder.button(
+                text=f"📦 {coin} {timeframe} ({age_str})",
+                callback_data=f"ai:analyze:{symbol}:{timeframe}"
+            )
+            cached_count += 1
+        if cached_count > 0:
+            rows.append(cached_count)
+
+    # Row 4-5: Dynamic symbols from Universe (3-5 symbols)
+    if dynamic_symbols:
+        dynamic_row = []
+        for m in dynamic_symbols[:5]:  # Max 5 dynamic symbols
+            coin = m.symbol.replace("USDT", "")
+            # Show price change for pumping/dumping
+            if current_category in ("pumping", "gainers"):
+                label = f"{coin} +{m.price_change_pct:.0f}%" if m.price_change_pct > 0 else f"{coin} {m.price_change_pct:.0f}%"
+            elif current_category in ("dumping", "losers"):
+                label = f"{coin} {m.price_change_pct:.0f}%"
+            elif current_category == "volatile":
+                label = f"{coin} ±{m.range_pct:.0f}%"
+            else:
+                # Trending/Popular - show volume in millions
+                vol_m = m.turnover_24h / 1_000_000
+                if vol_m >= 100:
+                    label = f"{coin} ${vol_m:.0f}M"
+                else:
+                    label = f"{coin}"
+
+            builder.button(
+                text=label,
+                callback_data=f"ai:symbol:{m.symbol}"
+            )
+            dynamic_row.append(1)
+
+        # Layout: 3+2 or 3 depending on count
+        if len(dynamic_row) > 3:
+            rows.extend([3, len(dynamic_row) - 3])
+        elif len(dynamic_row) > 0:
+            rows.append(len(dynamic_row))
+
+    # Row 6: Majors (anchor)
+    for symbol in MAJOR_SYMBOLS[:4]:  # BTC, ETH, SOL, BNB
+        coin = symbol.replace("USDT", "")
+        builder.button(text=coin, callback_data=f"ai:symbol:{symbol}")
+    rows.append(4)
+
+    # Row 7: Category buttons
+    categories = [
+        ("📊", "popular"),
+        ("🔥", "pumping"),
+        ("🧊", "dumping"),
+        ("⚡", "volatile"),
+    ]
+    for emoji, cat in categories:
+        is_current = "•" if cat == current_category else ""
+        builder.button(
+            text=f"{is_current}{emoji}",
+            callback_data=f"ai:cat:{cat}:{current_mode}"
+        )
+    rows.append(4)
+
+    # Row 8: Timeframes
+    builder.button(text="⏰ 1H", callback_data="ai:timeframe:1h")
+    builder.button(text="⏰ 4H", callback_data="ai:timeframe:4h")
+    builder.button(text="⏰ 1D", callback_data="ai:timeframe:1d")
+    rows.append(3)
+
+    builder.adjust(*rows)
+    return builder.as_markup()
+
+
+def get_category_keyboard(
+    current_category: str = "trending",
+    current_mode: str = "standard"
+) -> InlineKeyboardMarkup:
+    """
+    Клавиатура переключения категорий.
+
+    Args:
+        current_category: Текущая категория
+        current_mode: Текущий режим
+
+    Returns:
+        InlineKeyboardMarkup с категориями
+    """
+    builder = InlineKeyboardBuilder()
+
+    categories = [
+        ("🌊 Trending", "trending"),
+        ("📊 Popular", "popular"),
+        ("🔥 Pumping", "pumping"),
+        ("🧊 Dumping", "dumping"),
+        ("⚡ Volatile", "volatile"),
+    ]
+
+    for label, cat in categories:
+        is_current = "✓ " if cat == current_category else ""
+        builder.button(
+            text=f"{is_current}{label}",
+            callback_data=f"ai:cat:{cat}:{current_mode}"
+        )
+
+    builder.button(text="🔙 Назад", callback_data="ai:symbols")
+    builder.adjust(2, 2, 1, 1)
 
     return builder.as_markup()
 
