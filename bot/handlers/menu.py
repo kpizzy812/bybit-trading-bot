@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 
 from bot.states.trade_states import TradeStates
 from bot.keyboards.main_menu import get_main_menu
+from utils.order_filters import filter_user_orders
 import config
 
 router = Router()
@@ -44,15 +45,7 @@ async def positions_handler(message: Message, settings_storage, lock_manager, en
         all_orders = await client.get_open_orders()
 
         # Фильтруем только entry ордера (не reduce_only, не entry plan ордера)
-        orders = []
-        for o in all_orders:
-            if o.get('reduceOnly', False):
-                continue
-            # Исключаем ордера Entry Plans (начинаются с EP:)
-            order_link_id = o.get('orderLinkId', '')
-            if order_link_id.startswith('EP:'):
-                continue
-            orders.append(o)
+        orders = filter_user_orders(all_orders)
 
         # Получаем активные Entry Plans для пользователя
         entry_plans = []

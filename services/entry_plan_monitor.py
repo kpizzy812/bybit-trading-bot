@@ -5,7 +5,6 @@ Entry Plan Monitor
 Отслеживает активацию, fills, cancel условия и устанавливает SL/TP.
 Хранит планы в Redis для персистентности.
 """
-import asyncio
 import html
 import json
 import logging
@@ -15,7 +14,8 @@ from aiogram import Bot
 import redis.asyncio as aioredis
 
 import config
-from services.bybit import BybitClient
+from services.base_monitor import BaseMonitor
+from services.bybit_client_pool import client_pool
 from services.entry_plan import EntryPlan, EntryOrder
 from services.trade_logger import TradeLogger, TradeRecord, calculate_fee, calculate_margin
 from utils.validators import round_qty, round_price
@@ -31,7 +31,7 @@ ENTRY_PLANS_USER_PREFIX = "entry_plans:user:"  # {user_id} -> set of plan_ids
 COMPLETED_PLAN_TTL_SECONDS = 7 * 24 * 3600
 
 
-class EntryPlanMonitor:
+class EntryPlanMonitor(BaseMonitor):
     """
     Мониторинг Entry Plans с несколькими ордерами.
 
@@ -52,13 +52,10 @@ class EntryPlanMonitor:
         testnet: bool = False,
         redis_url: str = None
     ):
+        super().__init__(check_interval=check_interval)
         self.bot = bot
         self.trade_logger = trade_logger
-        self.check_interval = check_interval
         self.testnet = testnet  # Default, но каждый plan имеет свой testnet флаг
-
-        # Bybit clients (lazy init per testnet mode)
-        self._clients: Dict[bool, BybitClient] = {}
 
         # Redis для персистентности
         self.redis_url = redis_url or f"redis://{config.REDIS_HOST}:{config.REDIS_PORT}/{config.REDIS_DB}"
@@ -68,14 +65,13 @@ class EntryPlanMonitor:
         # Хранение планов: {plan_id: EntryPlan} (in-memory cache)
         self.active_plans: Dict[str, EntryPlan] = {}
 
-        self._running = False
-        self._task: Optional[asyncio.Task] = None
+    @property
+    def monitor_name(self) -> str:
+        return "Entry plan monitor"
 
-    def _get_client(self, testnet: bool) -> BybitClient:
+    def _get_client(self, testnet: bool):
         """Получить Bybit клиент для нужного режима (testnet/live)"""
-        if testnet not in self._clients:
-            self._clients[testnet] = BybitClient(testnet=testnet)
-        return self._clients[testnet]
+        return client_pool.get_client(testnet)
 
     # ==================== Redis Operations ====================
 
@@ -307,52 +303,23 @@ class EntryPlanMonitor:
             await self._delete_plan_from_redis(plan_id)
             logger.info(f"Plan {plan_id} unregistered")
 
-    async def start(self):
-        """Запустить мониторинг в фоновом режиме"""
-        if self._running:
-            logger.warning("Entry plan monitor already running")
-            return
-
-        # Подключиться к Redis
+    async def _on_start(self):
+        """Hook: подключение к Redis и загрузка планов при старте"""
         await self._connect_redis()
 
-        # Загрузить планы из Redis
         if self.use_redis:
             loaded_plans = await self._load_plans_from_redis()
             self.active_plans.update(loaded_plans)
             if loaded_plans:
                 logger.info(f"Restored {len(loaded_plans)} entry plans from Redis")
 
-        self._running = True
-        self._task = asyncio.create_task(self._monitor_loop())
-        logger.info(f"Entry plan monitor started (interval: {self.check_interval}s)")
-
-    async def stop(self):
-        """Остановить мониторинг"""
-        self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-
+    async def _on_stop(self):
+        """Hook: закрытие Redis при остановке"""
         await self._close_redis()
-        logger.info("Entry plan monitor stopped")
 
     # ==================== Main Loop ====================
 
-    async def _monitor_loop(self):
-        """Основной цикл мониторинга"""
-        while self._running:
-            try:
-                await self._check_all_plans()
-            except Exception as e:
-                logger.error(f"Error in entry plan monitor loop: {e}", exc_info=True)
-
-            await asyncio.sleep(self.check_interval)
-
-    async def _check_all_plans(self):
+    async def _check_cycle(self):
         """Проверить все активные планы"""
         for plan_id in list(self.active_plans.keys()):
             plan = self.active_plans.get(plan_id)

@@ -10,12 +10,12 @@ Position Monitor - мониторинг позиций и уведомления
 Также интегрируется с BreakevenManager для автоматического
 переноса SL на entry после первого TP.
 """
-import asyncio
 import logging
 from typing import Dict, Optional, Set, TYPE_CHECKING
 from datetime import datetime
 from aiogram import Bot
-from services.bybit import BybitClient
+from services.base_monitor import BaseMonitor
+from services.bybit_client_pool import client_pool
 from services.trade_logger import TradeLogger
 
 if TYPE_CHECKING:
@@ -49,7 +49,7 @@ class PositionSnapshot:
         return f"{self.symbol}:{self.side}"
 
 
-class PositionMonitor:
+class PositionMonitor(BaseMonitor):
     """
     Мониторинг позиций в реальном времени
 
@@ -69,16 +69,13 @@ class PositionMonitor:
         post_sl_analyzer: Optional['PostSLAnalyzer'] = None,
         supervisor_client: Optional['SupervisorClient'] = None
     ):
+        super().__init__(check_interval=check_interval)
         self.bot = bot
         self.trade_logger = trade_logger
-        self.check_interval = check_interval
         self.testnet = testnet
         self.breakeven_manager = breakeven_manager
         self.post_sl_analyzer = post_sl_analyzer
         self.supervisor_client = supervisor_client
-
-        # Создаем клиент один раз
-        self.client = BybitClient(testnet=testnet)
 
         # Храним snapshot открытых позиций по user_id
         # {user_id: {position_key: PositionSnapshot}}
@@ -91,8 +88,14 @@ class PositionMonitor:
         self._supervisor_sync_counter = 0
         self._supervisor_sync_interval = 4  # sync каждые 4 итерации (60 сек при 15 сек интервале)
 
-        self._running = False
-        self._task: Optional[asyncio.Task] = None
+    @property
+    def monitor_name(self) -> str:
+        return "Position monitor"
+
+    @property
+    def client(self):
+        """Получить Bybit клиент для текущего режима"""
+        return client_pool.get_client(self.testnet)
 
     def set_breakeven_manager(self, breakeven_manager: 'BreakevenManager'):
         """Установить BreakevenManager после инициализации"""
@@ -121,44 +124,16 @@ class PositionMonitor:
             del self.positions_cache[user_id]
         logger.info(f"User {user_id} unregistered from monitoring")
 
-    async def start(self):
-        """Запустить мониторинг в фоновом режиме"""
-        if self._running:
-            logger.warning("Position monitor already running")
-            return
+    async def _check_cycle(self):
+        """Основной цикл проверки позиций и supervisor sync"""
+        # Проверить позиции всех пользователей
+        await self._check_all_users()
 
-        self._running = True
-        self._task = asyncio.create_task(self._monitor_loop())
-        logger.info(f"Position monitor started (interval: {self.check_interval}s, testnet: {self.testnet})")
-
-    async def stop(self):
-        """Остановить мониторинг"""
-        self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        logger.info("Position monitor stopped")
-
-    async def _monitor_loop(self):
-        """Основной цикл мониторинга"""
-        while self._running:
-            try:
-                await self._check_all_users()
-
-                # Supervisor sync каждые N итераций
-                self._supervisor_sync_counter += 1
-                if self._supervisor_sync_counter >= self._supervisor_sync_interval:
-                    self._supervisor_sync_counter = 0
-                    await self._supervisor_sync_all_users()
-
-            except Exception as e:
-                logger.error(f"Error in monitor loop: {e}", exc_info=True)
-
-            # Ждем до следующей проверки
-            await asyncio.sleep(self.check_interval)
+        # Supervisor sync каждые N итераций
+        self._supervisor_sync_counter += 1
+        if self._supervisor_sync_counter >= self._supervisor_sync_interval:
+            self._supervisor_sync_counter = 0
+            await self._supervisor_sync_all_users()
 
     async def _check_all_users(self):
         """Проверить позиции всех зарегистрированных пользователей"""

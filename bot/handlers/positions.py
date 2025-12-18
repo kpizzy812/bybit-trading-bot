@@ -24,6 +24,7 @@ from bot.keyboards.positions_kb import (
 )
 from bot.keyboards.main_menu import get_main_menu
 from services.bybit import BybitClient, BybitError
+from utils.order_filters import filter_user_orders
 import logging
 
 logger = logging.getLogger(__name__)
@@ -54,14 +55,7 @@ async def refresh_positions(callback: CallbackQuery, settings_storage, entry_pla
         all_orders = await client.get_open_orders()
 
         # Фильтруем только entry ордера (не reduce_only, не entry plan ордера)
-        orders = []
-        for o in all_orders:
-            if o.get('reduceOnly', False):
-                continue
-            order_link_id = o.get('orderLinkId', '')
-            if order_link_id.startswith('EP:'):
-                continue
-            orders.append(o)
+        orders = filter_user_orders(all_orders)
 
         # Получаем активные Entry Plans
         entry_plans = []
@@ -675,14 +669,7 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage, entr
         all_orders = await client.get_open_orders()
 
         # Фильтруем только entry ордера (не reduce_only, не entry plan ордера)
-        orders = []
-        for o in all_orders:
-            if o.get('reduceOnly', False):
-                continue
-            order_link_id = o.get('orderLinkId', '')
-            if order_link_id.startswith('EP:'):
-                continue
-            orders.append(o)
+        orders = filter_user_orders(all_orders)
 
         # Получаем активные Entry Plans
         entry_plans = []

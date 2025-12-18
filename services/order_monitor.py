@@ -6,12 +6,12 @@ Order Monitor - мониторинг pending ордеров и автомати�
 - Автоматически устанавливает ladder Take Profit
 - Отправляет уведомление пользователю
 """
-import asyncio
 import logging
-from typing import Dict, Optional, Set
+from typing import Dict, Optional
 from datetime import datetime
 from aiogram import Bot
-from services.bybit import BybitClient
+from services.base_monitor import BaseMonitor
+from services.bybit_client_pool import client_pool
 from utils.validators import round_qty, round_price
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ class PendingOrder:
         self.created_at = datetime.utcnow()
 
 
-class OrderMonitor:
+class OrderMonitor(BaseMonitor):
     """
     Мониторинг pending ордеров в реальном времени
 
@@ -51,25 +51,21 @@ class OrderMonitor:
         check_interval: int = 10,  # Интервал проверки в секундах
         testnet: bool = False
     ):
+        super().__init__(check_interval=check_interval)
         self.bot = bot
         self.trade_logger = trade_logger
-        self.check_interval = check_interval
         self.testnet = testnet  # Default, но каждый order имеет свой testnet флаг
-
-        # Bybit clients (lazy init per testnet mode)
-        self._clients: Dict[bool, BybitClient] = {}
 
         # Храним pending orders: {user_id: {order_id: PendingOrder}}
         self.pending_orders: Dict[int, Dict[str, PendingOrder]] = {}
 
-        self._running = False
-        self._task: Optional[asyncio.Task] = None
+    @property
+    def monitor_name(self) -> str:
+        return "Order monitor"
 
-    def _get_client(self, testnet: bool) -> BybitClient:
+    def _get_client(self, testnet: bool):
         """Получить Bybit клиент для нужного режима (testnet/live)"""
-        if testnet not in self._clients:
-            self._clients[testnet] = BybitClient(testnet=testnet)
-        return self._clients[testnet]
+        return client_pool.get_client(testnet)
 
     def register_order(self, order_data: dict):
         """Зарегистрировать ордер для мониторинга"""
@@ -88,39 +84,7 @@ class OrderMonitor:
             del self.pending_orders[user_id][order_id]
             logger.info(f"Order {order_id} unregistered (user: {user_id})")
 
-    async def start(self):
-        """Запустить мониторинг в фоновом режиме"""
-        if self._running:
-            logger.warning("Order monitor already running")
-            return
-
-        self._running = True
-        self._task = asyncio.create_task(self._monitor_loop())
-        logger.info(f"Order monitor started (interval: {self.check_interval}s, testnet: {self.testnet})")
-
-    async def stop(self):
-        """Остановить мониторинг"""
-        self._running = False
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        logger.info("Order monitor stopped")
-
-    async def _monitor_loop(self):
-        """Основной цикл мониторинга"""
-        while self._running:
-            try:
-                await self._check_all_orders()
-            except Exception as e:
-                logger.error(f"Error in order monitor loop: {e}", exc_info=True)
-
-            # Ждем до следующей проверки
-            await asyncio.sleep(self.check_interval)
-
-    async def _check_all_orders(self):
+    async def _check_cycle(self):
         """Проверить все pending orders"""
         for user_id in list(self.pending_orders.keys()):
             for order_id in list(self.pending_orders.get(user_id, {}).keys()):
