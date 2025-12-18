@@ -87,7 +87,7 @@ class PositionMonitor(BaseMonitor):
 
         # Счётчик для supervisor sync (каждые N итераций)
         self._supervisor_sync_counter = 0
-        self._supervisor_sync_interval = 4  # sync каждые 4 итерации (60 сек при 15 сек интервале)
+        self._supervisor_sync_interval = 240  # sync каждые 240 итераций (1 час при 15 сек интервале)
 
     @property
     def monitor_name(self) -> str:
