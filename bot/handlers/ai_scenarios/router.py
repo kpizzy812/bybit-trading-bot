@@ -296,6 +296,12 @@ async def ai_category_selected(callback: CallbackQuery, state: FSMContext):
     await callback.answer(category_label)
 
 
+@router.callback_query(F.data == "ai:noop")
+async def ai_noop(callback: CallbackQuery):
+    """Пустой хэндлер для некликабельных кнопок-меток"""
+    await callback.answer()
+
+
 @router.callback_query(AIScenarioStates.choosing_symbol, F.data.startswith("ai:symbol:"))
 async def ai_symbol_selected(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора символа"""
