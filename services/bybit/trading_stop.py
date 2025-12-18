@@ -52,6 +52,30 @@ class TradingStopMixin:
             position = positions[0]
             current_sl = position.get('stopLoss', '')
             current_tp = position.get('takeProfit', '')
+            position_side = position.get('side', '')  # "Buy" or "Sell"
+            mark_price = float(position.get('markPrice', 0))
+
+            # 1.5 Валидация SL относительно стороны позиции
+            if stop_loss and mark_price > 0 and position_side:
+                sl_price = float(stop_loss)
+                if position_side == "Buy" and sl_price >= mark_price:
+                    logger.error(
+                        f"[{symbol}] Invalid SL for Buy position: SL={sl_price} >= markPrice={mark_price}. "
+                        f"SL must be BELOW current price for long positions."
+                    )
+                    raise BybitError(
+                        f"Invalid SL: {sl_price} is above mark price {mark_price} for Buy position. "
+                        f"Stop Loss for long must be BELOW entry."
+                    )
+                elif position_side == "Sell" and sl_price <= mark_price:
+                    logger.error(
+                        f"[{symbol}] Invalid SL for Sell position: SL={sl_price} <= markPrice={mark_price}. "
+                        f"SL must be ABOVE current price for short positions."
+                    )
+                    raise BybitError(
+                        f"Invalid SL: {sl_price} is below mark price {mark_price} for Sell position. "
+                        f"Stop Loss for short must be ABOVE entry."
+                    )
 
             # 2. Мерджим: новые значения перезаписывают старые
             final_sl = stop_loss if stop_loss is not None else current_sl

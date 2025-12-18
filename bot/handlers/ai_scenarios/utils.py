@@ -165,6 +165,22 @@ def parse_entry_plan(
         if total_weight > 0:
             p_avg = p_avg / total_weight
 
+    # === Валидация SL относительно стороны ===
+    # Для Buy (long): SL должен быть ниже P_avg
+    # Для Sell (short): SL должен быть выше P_avg
+    if side.lower() == "buy" and stop_price >= p_avg:
+        logger.error(
+            f"Invalid SL for Buy: SL={stop_price} >= P_avg={p_avg}. "
+            f"Stop Loss for long must be BELOW entry."
+        )
+        return None
+    elif side.lower() == "sell" and stop_price <= p_avg:
+        logger.error(
+            f"Invalid SL for Sell: SL={stop_price} <= P_avg={p_avg}. "
+            f"Stop Loss for short must be ABOVE entry."
+        )
+        return None
+
     # === RISK-ON-PLAN: Расчёт Q_total ===
     stop_distance = abs(p_avg - stop_price)
 
