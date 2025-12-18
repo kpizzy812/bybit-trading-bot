@@ -18,6 +18,7 @@ from bot.handlers.positions.formatters import (
     format_entry_plans_list,
     format_orders_list
 )
+from bot.utils.safe_edit import safe_edit_text
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -55,7 +56,8 @@ async def refresh_positions(callback: CallbackQuery, settings_storage, entry_pla
                     })
 
         if not positions and not orders and not entry_plans:
-            await callback.message.edit_text(
+            await safe_edit_text(
+                callback.message,
                 "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
                 "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю",
                 reply_markup=get_empty_positions_kb()
@@ -78,16 +80,14 @@ async def refresh_positions(callback: CallbackQuery, settings_storage, entry_pla
 
         text += "💡 <i>Нажми для управления</i>"
 
-        await callback.message.edit_text(
-            text,
+        await safe_edit_text(
+            callback.message, text,
             reply_markup=get_positions_with_plans_kb(positions, orders, entry_plans)
         )
 
     except Exception as e:
         logger.error(f"Error refreshing positions: {e}")
-        await callback.message.edit_text(
-            f"❌ Ошибка при обновлении позиций:\n{html.escape(str(e))}"
-        )
+        await safe_edit_text(callback.message, f"❌ Ошибка при обновлении позиций:\n{html.escape(str(e))}")
 
 
 @router.callback_query(F.data == "pos_back_to_list")
@@ -122,7 +122,8 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage, entr
                     })
 
         if not positions and not orders and not entry_plans:
-            await callback.message.edit_text(
+            await safe_edit_text(
+                callback.message,
                 "📊 <b>Открытых позиций и ордеров нет</b>\n\n"
                 "Используй <b>➕ Открыть сделку</b> чтобы начать торговлю",
                 reply_markup=get_empty_positions_kb()
@@ -144,15 +145,11 @@ async def back_to_positions_list(callback: CallbackQuery, settings_storage, entr
 
         text += "💡 <i>Нажми для управления</i>"
 
-        await callback.message.edit_text(
-            text,
+        await safe_edit_text(
+            callback.message, text,
             reply_markup=get_positions_with_plans_kb(positions, orders, entry_plans)
         )
 
     except Exception as e:
         logger.error(f"Error going back to positions list: {e}")
-        from bot.keyboards.main_menu import get_main_menu
-        await callback.message.edit_text(
-            f"❌ Ошибка:\n{html.escape(str(e))}",
-            reply_markup=get_main_menu()
-        )
+        await safe_edit_text(callback.message, f"❌ Ошибка:\n{html.escape(str(e))}")

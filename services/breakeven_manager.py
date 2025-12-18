@@ -102,6 +102,19 @@ class BreakevenManager:
                 # Short: SL немного ниже entry
                 breakeven_price = entry_price * (1 - buffer_pct)
 
+            # Проверяем текущий SL - не ухудшаем позицию!
+            positions = await self.client.get_positions(symbol=symbol)
+            if positions:
+                current_sl_str = positions[0].get('stopLoss', '')
+                if current_sl_str:
+                    current_sl = float(current_sl_str)
+                    if side == "Buy" and current_sl > breakeven_price:
+                        logger.info(f"Current SL {current_sl} already better than BE {breakeven_price}, skipping")
+                        return False
+                    elif side == "Sell" and current_sl < breakeven_price:
+                        logger.info(f"Current SL {current_sl} already better than BE {breakeven_price}, skipping")
+                        return False
+
             # Получаем instrument info для округления
             instrument_info = await self.client.get_instrument_info(symbol)
             tick_size = instrument_info.get('tickSize', '0.01')

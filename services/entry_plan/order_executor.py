@@ -39,18 +39,26 @@ def evaluate_activation(
         return True, ""  # Нет уровня = сразу активируем
 
     # === DIRECTION SANITY CHECK ===
-    if side:
+    # Проверяем что цена не ПРОСКОЧИЛА уровень (момент упущен)
+    # Для touch планов: ждём подход цены к уровню с любой стороны
+    if side and activation_type == "touch":
         distance_pct = (current_price - activation_level) / activation_level * 100
 
+        # Используем больший порог для direction_sanity (5%) -
+        # отменяем только если цена СИЛЬНО проскочила уровень
+        sanity_threshold_pct = 5.0
+
         if side == "Long":
-            # Для Long: цена не должна быть выше activation_level на > max_distance_pct
-            if distance_pct > max_distance_pct:
-                return False, f"price_moved_above (current ${current_price:.2f} > level ${activation_level:.2f})"
+            # Для Long: отменяем если цена ушла НИЖЕ уровня слишком далеко
+            # (цена проскочила вниз мимо точки входа)
+            if distance_pct < -sanity_threshold_pct:
+                return False, f"price_moved_below (current ${current_price:.2f} << level ${activation_level:.2f})"
 
         elif side == "Short":
-            # Для Short: цена не должна быть ниже activation_level на > max_distance_pct
-            if distance_pct < -max_distance_pct:
-                return False, f"price_moved_below (current ${current_price:.2f} < level ${activation_level:.2f})"
+            # Для Short: отменяем если цена ушла ВЫШЕ уровня слишком далеко
+            # (цена проскочила вверх мимо точки входа)
+            if distance_pct > sanity_threshold_pct:
+                return False, f"price_moved_above (current ${current_price:.2f} >> level ${activation_level:.2f})"
 
     # === ACTIVATION CONDITIONS ===
     if activation_type == "touch":

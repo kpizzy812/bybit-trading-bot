@@ -5,6 +5,7 @@ python-dotenv
 loguru
 aiohttp
 sqlalchemy[asyncio]
+alembic
 asyncpg
 mplfinance
 pandas

@@ -14,6 +14,7 @@ from bot.keyboards.positions_kb import (
 from bot.keyboards.main_menu import get_main_menu
 from bot.handlers.positions.formatters import format_entry_plan_detail
 from bot.handlers.positions.chart_generators import generate_entry_plan_chart
+from bot.utils.safe_edit import safe_edit_text
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -35,9 +36,7 @@ async def show_entry_plan_detail(callback: CallbackQuery, entry_plan_monitor, se
             break
 
     if not plan:
-        await callback.message.edit_text(
-            f"❌ Entry Plan не найден (возможно уже завершён)"
-        )
+        await safe_edit_text(callback.message, "❌ Entry Plan не найден (возможно уже завершён)")
         return
 
     # Форматируем детали плана
@@ -93,12 +92,12 @@ async def activate_entry_plan_now(callback: CallbackQuery, entry_plan_monitor):
             break
 
     if not plan:
-        await callback.message.edit_text("❌ Entry Plan не найден")
+        await safe_edit_text(callback.message, "❌ Entry Plan не найден")
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
         return
 
     if plan.is_activated:
-        await callback.message.edit_text("⚠️ План уже активирован")
+        await safe_edit_text(callback.message, "⚠️ План уже активирован")
         return
 
     try:
@@ -106,7 +105,8 @@ async def activate_entry_plan_now(callback: CallbackQuery, entry_plan_monitor):
         await entry_plan_monitor._activate_plan(plan)
 
         side_emoji = "🟢" if plan.side == "Long" else "🔴"
-        await callback.message.edit_text(
+        await safe_edit_text(
+            callback.message,
             f"✅ <b>Entry Plan активирован!</b>\n\n"
             f"{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}\n"
             f"📊 Mode: {plan.mode}\n"
@@ -117,9 +117,7 @@ async def activate_entry_plan_now(callback: CallbackQuery, entry_plan_monitor):
 
     except Exception as e:
         logger.error(f"Error activating entry plan: {e}")
-        await callback.message.edit_text(
-            f"❌ Ошибка при активации:\n{html.escape(str(e))}"
-        )
+        await safe_edit_text(callback.message, f"❌ Ошибка при активации:\n{html.escape(str(e))}")
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
 
@@ -138,14 +136,13 @@ async def cancel_entry_plan_confirmation(callback: CallbackQuery, entry_plan_mon
             break
 
     if not plan:
-        await callback.message.edit_text(
-            f"❌ Entry Plan не найден"
-        )
+        await safe_edit_text(callback.message, "❌ Entry Plan не найден")
         return
 
     side_emoji = "🟢" if plan.side == "Long" else "🔴"
 
-    await callback.message.edit_text(
+    await safe_edit_text(
+        callback.message,
         f"⚠️ <b>Подтверждение отмены Entry Plan</b>\n\n"
         f"{side_emoji} <b>{plan.symbol}</b> {plan.side.upper()}\n"
         f"📊 Mode: {plan.mode}\n"
@@ -174,9 +171,7 @@ async def cancel_entry_plan_execute(callback: CallbackQuery, entry_plan_monitor)
             break
 
     if not plan:
-        await callback.message.edit_text(
-            f"❌ Entry Plan не найден"
-        )
+        await safe_edit_text(callback.message, "❌ Entry Plan не найден")
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
         return
 
@@ -203,12 +198,10 @@ async def cancel_entry_plan_execute(callback: CallbackQuery, entry_plan_monitor)
         else:
             result_text += "\n<i>Все ордера отменены, позиция не открыта</i>"
 
-        await callback.message.edit_text(result_text)
+        await safe_edit_text(callback.message, result_text)
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
     except Exception as e:
         logger.error(f"Error cancelling entry plan: {e}")
-        await callback.message.edit_text(
-            f"❌ Ошибка при отмене плана:\n{html.escape(str(e))}"
-        )
+        await safe_edit_text(callback.message, f"❌ Ошибка при отмене плана:\n{html.escape(str(e))}")
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())

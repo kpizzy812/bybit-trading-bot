@@ -40,7 +40,8 @@ print_menu() {
     echo -e "  ${GREEN}6)${NC} logs     - Логи (realtime + 500 последних)"
     echo -e "  ${GREEN}7)${NC} errors   - Просмотр errors.log"
     echo -e "  ${GREEN}8)${NC} sync     - Только rsync файлов"
-    echo -e "  ${GREEN}9)${NC} ssh      - Подключиться к серверу"
+    echo -e "  ${GREEN}9)${NC} migrate  - Применить миграции БД"
+    echo -e "  ${GREEN}10)${NC} ssh     - Подключиться к серверу"
     echo -e "  ${GREEN}0)${NC} exit     - Выход"
     echo ""
 }
@@ -60,6 +61,7 @@ do_sync() {
         --exclude '.claude/' \
         --exclude 'storage/charts/' \
         --exclude '*.db' \
+        --exclude 'SyntraAI/' \
         "$LOCAL_DIR/" "$SSH_HOST:$REMOTE_DIR/"
     echo -e "${GREEN}✅ Синхронизация завершена${NC}"
 }
@@ -104,12 +106,20 @@ SERVICEEOF
     echo -e "${GREEN}✅ Сервис настроен${NC}"
 }
 
+do_migrate() {
+    echo -e "${BLUE}🗄️ Применение миграций...${NC}"
+    ssh "$SSH_HOST" "cd $REMOTE_DIR && ./venv/bin/python -m alembic upgrade head"
+    echo -e "${GREEN}✅ Миграции применены${NC}"
+}
+
 do_deploy() {
     echo -e "${CYAN}🚀 Запуск полного деплоя...${NC}"
     echo ""
     do_sync
     echo ""
     do_setup_venv
+    echo ""
+    do_migrate
     echo ""
     do_setup_service
     echo ""

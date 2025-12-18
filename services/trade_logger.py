@@ -17,6 +17,77 @@ logger = logging.getLogger(__name__)
 TAKER_FEE_RATE = 0.00055  # 0.055%
 MAKER_FEE_RATE = 0.0002   # 0.02%
 
+# === OUTCOME TYPE V2 CONSTANTS ===
+BE_EPSILON_PCT = 0.001  # 0.1% tolerance for break-even detection
+
+
+def determine_outcome_type_v2(
+    side: str,
+    entry_price: float,
+    exit_price: float,
+    exit_reason: str,
+    fills: list,
+    trade_id: str = ""
+) -> str:
+    """
+    Определяем V2 outcome type по фактической цене выхода.
+
+    Типы:
+    - sl_early: SL до TP1 (полный лосс -1R)
+    - be_after_tp1: BE hit после TP1 (вышли на entry ± epsilon)
+    - stop_in_profit: Trail/lock profit после TP1 (вышли выше entry)
+    - tp1_final: Финал на TP1
+    - tp2_final: Финал на TP2
+    - tp3_final: Финал на TP3
+    - other: Остальное (manual, timeout, etc)
+    """
+    # TP outcomes - определяем напрямую по reason
+    if exit_reason in ("tp1", "tp"):
+        return "tp1_final"
+    if exit_reason == "tp2":
+        return "tp2_final"
+    if exit_reason == "tp3":
+        return "tp3_final"
+
+    # SL outcomes - определяем по цене
+    if exit_reason == "sl":
+        # Проверяем был ли TP1 hit по fills
+        tp1_hit = any(
+            f.get('reason') == 'tp1'
+            for f in (fills or [])
+        )
+
+        if not tp1_hit:
+            return "sl_early"  # SL до TP1 = полный лосс
+
+        # После TP1 - смотрим где вышли относительно entry
+        if entry_price <= 0:
+            return "sl_early"  # Fallback
+
+        pct_diff = (exit_price - entry_price) / entry_price
+
+        # Инверсия для шорта
+        if side.lower() == "short":
+            pct_diff = -pct_diff
+
+        if abs(pct_diff) <= BE_EPSILON_PCT:
+            return "be_after_tp1"  # Вышли на entry ± epsilon
+        elif pct_diff > 0:
+            return "stop_in_profit"  # Вышли выше entry (trail/lock)
+        else:
+            # SL ниже entry после TP1 = BUG / misexecution
+            logger.warning(
+                f"Anomaly: SL below entry after TP1! trade_id={trade_id}, "
+                f"side={side}, entry={entry_price}, exit={exit_price}, pct={pct_diff:.4f}"
+            )
+            return "sl_early"  # Считаем как sl_early для EV (консервативно)
+
+    # Breakeven reason (не SL)
+    if exit_reason == "breakeven":
+        return "be_after_tp1"
+
+    return "other"
+
 
 @dataclass
 class TradeFill:
@@ -121,6 +192,10 @@ class TradeRecord:
     prob_sl: Optional[float] = None  # P(stop loss)
     prob_tp1: Optional[float] = None  # P(TP1)
     probs_source: Optional[str] = None  # learning, llm, default
+
+    # === OUTCOME TYPE V2 (для EV learning) ===
+    # Типы: "sl_early", "be_after_tp1", "stop_in_profit", "tp1_final", "tp2_final", "tp3_final", "other"
+    outcome_type_v2: Optional[str] = None
 
     # === POST-SL ANALYSIS ===
     post_sl_price_1h: Optional[float] = None
@@ -467,6 +542,16 @@ class TradeLogger:
             target_trade.exit_reason = "breakeven"
         else:
             target_trade.exit_reason = "manual"
+
+        # === OUTCOME TYPE V2 (для EV learning) ===
+        target_trade.outcome_type_v2 = determine_outcome_type_v2(
+            side=target_trade.side,
+            entry_price=target_trade.entry_price,
+            exit_price=target_trade.exit_price or exit_price,
+            exit_reason=reason,  # Используем конкретный reason (tp1, tp2, sl), не обобщённый
+            fills=target_trade.fills,
+            trade_id=trade_id
+        )
 
         # Обновляем статус и closed_at
         if is_final or (target_trade.remaining_qty is not None and target_trade.remaining_qty <= 0):
