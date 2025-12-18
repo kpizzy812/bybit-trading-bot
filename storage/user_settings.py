@@ -62,6 +62,9 @@ class UserSettings:
     # Масштабирование риска от confidence AI
     confidence_risk_scaling: bool = config.CONFIDENCE_RISK_SCALING_ENABLED
 
+    # Trading Mode (conservative, standard, high_risk, meme)
+    default_trading_mode: str = "standard"
+
     def to_dict(self) -> Dict:
         return asdict(self)
 
