@@ -697,8 +697,12 @@ async def show_scenarios_list(
         # Все TP targets
         targets = scenario.get("targets", [])
 
+        # 🆕 Scenario Weight (распределение между сценариями)
+        scenario_weight = scenario.get("scenario_weight", 0)
+        weight_text = f" [{scenario_weight*100:.0f}%]" if scenario_weight > 0 else ""
+
         # Формируем текст сценария
-        text += f"{i}. {bias_emoji} <b>{name}</b> ({confidence:.0f}%){ev_info}{warning_mark}\n"
+        text += f"{i}. {bias_emoji} <b>{name}</b> ({confidence:.0f}%){weight_text}{ev_info}{warning_mark}\n"
         text += f"   Entry: ${entry_min:,.2f} - ${entry_max:,.2f}\n"
         text += f"   Stop: ${sl_price:,.2f}\n"
 
@@ -930,12 +934,14 @@ async def show_scenario_detail(
     # === OUTCOME PROBS ===
     outcome_probs = scenario.get("outcome_probs") or {}
     probs_text = ""
-    if outcome_probs and outcome_probs.get("source"):
-        prob_sl = outcome_probs.get("sl", 0)
-        prob_tp1 = outcome_probs.get("tp1", 0)
-        prob_tp2 = outcome_probs.get("tp2")
-        prob_tp3 = outcome_probs.get("tp3")
-        probs_source = html.escape(str(outcome_probs.get("source", "")))
+    # Поддержка обоих форматов ключей: старый (sl, tp1) и новый (sl_early, tp1_final)
+    prob_sl = outcome_probs.get("sl_early") or outcome_probs.get("sl", 0)
+    prob_tp1 = outcome_probs.get("tp1_final") or outcome_probs.get("tp1", 0)
+    prob_tp2 = outcome_probs.get("tp2_final") or outcome_probs.get("tp2")
+    prob_tp3 = outcome_probs.get("tp3_final") or outcome_probs.get("tp3")
+
+    if prob_sl > 0 or prob_tp1 > 0:
+        probs_source = html.escape(str(outcome_probs.get("source", "llm")))
         sample_size = outcome_probs.get("sample_size")
 
         probs_text = f"📊 <b>Outcome Probs</b> <i>({probs_source}"
@@ -968,10 +974,14 @@ async def show_scenario_detail(
     bearish_factors = why.get("bearish_factors", [])
     risks = why.get("risks", [])
 
+    # 🆕 Scenario Weight
+    scenario_weight = scenario.get("scenario_weight", 0)
+    weight_text = f" | Weight: {scenario_weight*100:.0f}%" if scenario_weight > 0 else ""
+
     # Формируем карточку
     card = f"""
 {bias_emoji} <b>{name}</b>{archetype_text}
-📊 Confidence: {confidence:.0f}%
+📊 Confidence: {confidence:.0f}%{weight_text}
 {ev_text}{probs_text}{class_text}{real_ev_text}
 {entry_text}
 
