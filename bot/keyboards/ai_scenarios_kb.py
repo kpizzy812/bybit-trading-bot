@@ -304,12 +304,17 @@ def get_scenario_detail_keyboard(
     # Выбор риска для quick trade
     if risk_mode == 'percent':
         # Процентные пресеты (когда trading_capital_mode == 'auto')
+        builder.button(text="💰 0.25%", callback_data=f"ai:trade_pct:{scenario_index}:0.25")
         builder.button(text="💰 0.5%", callback_data=f"ai:trade_pct:{scenario_index}:0.5")
         builder.button(text="💰 0.75%", callback_data=f"ai:trade_pct:{scenario_index}:0.75")
         builder.button(text="💰 1%", callback_data=f"ai:trade_pct:{scenario_index}:1")
         builder.button(text="💰 1.5%", callback_data=f"ai:trade_pct:{scenario_index}:1.5")
         # Custom процент
         builder.button(text="✏️ Custom %", callback_data=f"ai:custom_risk_pct:{scenario_index}")
+        # Кнопки управления
+        builder.button(text="🔙 К сценариям", callback_data="ai:back_to_list")
+        # Layout: [график если есть], 3+2 пресета риска, custom+назад
+        rows.extend([3, 2, 2])
     else:
         # USD пресеты (когда trading_capital_mode == 'manual')
         builder.button(text="💰 Trade $5", callback_data=f"ai:trade:{scenario_index}:5")
@@ -318,12 +323,10 @@ def get_scenario_detail_keyboard(
         builder.button(text="💰 Trade $50", callback_data=f"ai:trade:{scenario_index}:50")
         # Custom риск
         builder.button(text="✏️ Custom Risk", callback_data=f"ai:custom_risk:{scenario_index}")
-
-    # Кнопки управления
-    builder.button(text="🔙 К сценариям", callback_data="ai:back_to_list")
-
-    # Layout: [график если есть], 2+2 пресета риска, custom, назад
-    rows.extend([2, 2, 1, 1])
+        # Кнопки управления
+        builder.button(text="🔙 К сценариям", callback_data="ai:back_to_list")
+        # Layout: [график если есть], 2+2 пресета риска, custom, назад
+        rows.extend([2, 2, 1, 1])
     builder.adjust(*rows)
 
     return builder.as_markup()
