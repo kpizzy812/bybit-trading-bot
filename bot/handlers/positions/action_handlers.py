@@ -7,6 +7,7 @@ import logging
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramBadRequest
 
 from bot.keyboards.positions_kb import (
     get_close_confirmation_kb,
@@ -18,6 +19,26 @@ from bot.handlers.positions.states import PositionStates
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+async def safe_edit_or_send(callback: CallbackQuery, text: str, reply_markup=None):
+    """
+    Безопасное редактирование сообщения.
+    Если сообщение содержит фото - удаляем и отправляем новое.
+    """
+    try:
+        # Пробуем edit_text
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "no text in the message" in str(e) or "message can't be edited" in str(e):
+            # Сообщение с фото - удаляем и отправляем новое
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(text, reply_markup=reply_markup)
+        else:
+            raise
 
 
 # ============================================================
@@ -71,7 +92,8 @@ async def partial_close_position(callback: CallbackQuery, settings_storage, trad
             logger.error(f"Failed to log partial close: {log_error}")
 
         # Успешное закрытие
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback,
             f"✅ <b>Позиция частично закрыта!</b>\n\n"
             f"Symbol: {symbol}\n"
             f"Закрыто: {result['closed_qty']} ({percent}%)\n"
@@ -83,7 +105,8 @@ async def partial_close_position(callback: CallbackQuery, settings_storage, trad
 
     except BybitError as e:
         logger.error(f"Error partial closing position: {e}")
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback,
             f"❌ <b>Ошибка при закрытии позиции</b>\n\n"
             f"{html.escape(str(e))}\n\n"
             f"Попробуй снова или обратись к главному меню"
@@ -103,7 +126,8 @@ async def close_position_confirmation(callback: CallbackQuery):
     # Парсим symbol
     symbol = callback.data.split(":")[1]
 
-    await callback.message.edit_text(
+    await safe_edit_or_send(
+        callback,
         f"⚠️ <b>Подтверждение закрытия</b>\n\n"
         f"Ты уверен, что хочешь закрыть позицию {symbol} по рынку?\n\n"
         f"Это действие нельзя отменить!",
@@ -181,14 +205,16 @@ async def close_position_confirmed(callback: CallbackQuery, settings_storage, tr
                 f"PnL: ${partial_pnl:+.2f}"
             )
 
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback,
             msg + "\n\n💡 Используй <b>📊 Позиции</b> чтобы проверить статус"
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
     except BybitError as e:
         logger.error(f"Error closing position: {e}")
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback,
             f"❌ <b>Ошибка при закрытии</b>\n\n{html.escape(str(e))}"
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
@@ -210,7 +236,8 @@ async def move_sl_request(callback: CallbackQuery, state: FSMContext):
     await state.update_data(move_sl_symbol=symbol)
     await state.set_state(PositionStates.entering_new_sl)
 
-    await callback.message.edit_text(
+    await safe_edit_or_send(
+        callback,
         f"🧷 <b>Перемещение Stop Loss для {symbol}</b>\n\n"
         f"Введи новую цену стоп-лосса:\n\n"
         f"⚠️ Для Long позиции: SL должен быть ниже entry\n"
@@ -285,7 +312,8 @@ async def panic_close_all_confirmation(callback: CallbackQuery):
     """Запрос подтверждения Panic Close All"""
     await callback.answer()
 
-    await callback.message.edit_text(
+    await safe_edit_or_send(
+        callback,
         "🧯 <b>PANIC CLOSE ALL</b>\n\n"
         "⚠️⚠️⚠️ <b>ВНИМАНИЕ!</b> ⚠️⚠️⚠️\n\n"
         "Ты уверен, что хочешь закрыть ВСЕ открытые позиции по рынку?\n\n"
@@ -310,7 +338,8 @@ async def panic_close_all_execute(callback: CallbackQuery, settings_storage, tra
         positions = await client.get_positions()
 
         if not positions:
-            await callback.message.edit_text(
+            await safe_edit_or_send(
+                callback,
                 "📊 Нет открытых позиций для закрытия"
             )
             await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
@@ -360,12 +389,13 @@ async def panic_close_all_execute(callback: CallbackQuery, settings_storage, tra
 
         result_text += "💡 Проверь статус в <b>📊 Позиции</b>"
 
-        await callback.message.edit_text(result_text)
+        await safe_edit_or_send(callback, result_text)
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
 
     except Exception as e:
         logger.error(f"Error during panic close all: {e}")
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback,
             f"❌ Ошибка при Panic Close:\n{html.escape(str(e))}"
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
@@ -401,7 +431,8 @@ async def cancel_order(callback: CallbackQuery, settings_storage):
                 break
 
         if not order_id:
-            await callback.message.edit_text(
+            await safe_edit_or_send(
+                callback,
                 f"❌ Ордер не найден (возможно уже исполнен или отменён)"
             )
             await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())
@@ -410,7 +441,8 @@ async def cancel_order(callback: CallbackQuery, settings_storage):
         # Отменяем ордер
         await client.cancel_order(symbol=symbol, order_id=order_id)
 
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback,
             f"✅ <b>Ордер отменён!</b>\n\n"
             f"Symbol: {symbol}\n\n"
             f"💡 Используй <b>📊 Позиции</b> для просмотра активных сделок"
@@ -419,7 +451,8 @@ async def cancel_order(callback: CallbackQuery, settings_storage):
 
     except BybitError as e:
         logger.error(f"Error cancelling order: {e}")
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback,
             f"❌ <b>Ошибка при отмене ордера</b>\n\n{html.escape(str(e))}"
         )
         await callback.message.answer("Используй главное меню 👇", reply_markup=get_main_menu())

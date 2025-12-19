@@ -6,6 +6,7 @@ import logging
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, BufferedInputFile
+from aiogram.exceptions import TelegramBadRequest
 
 from bot.keyboards.positions_kb import (
     get_position_detail_kb,
@@ -20,6 +21,21 @@ from bot.handlers.positions.chart_generators import generate_position_chart
 
 logger = logging.getLogger(__name__)
 router = Router()
+
+
+async def safe_edit_or_send(callback: CallbackQuery, text: str, reply_markup=None):
+    """Безопасное редактирование сообщения (для сообщений с фото)."""
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest as e:
+        if "no text in the message" in str(e) or "message can't be edited" in str(e):
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+            await callback.message.answer(text, reply_markup=reply_markup)
+        else:
+            raise
 
 
 @router.callback_query(F.data.startswith("pos_detail:"))
@@ -39,7 +55,8 @@ async def show_position_detail(callback: CallbackQuery, settings_storage):
         positions = await client.get_positions(symbol=symbol)
 
         if not positions:
-            await callback.message.edit_text(
+            await safe_edit_or_send(
+                callback,
                 f"❌ Позиция {symbol} не найдена"
             )
             return
@@ -131,7 +148,8 @@ async def show_order_detail(callback: CallbackQuery, settings_storage):
                 break
 
         if not order:
-            await callback.message.edit_text(
+            await safe_edit_or_send(
+                callback,
                 f"❌ Ордер не найден (возможно уже исполнен или отменён)"
             )
             return
@@ -140,13 +158,15 @@ async def show_order_detail(callback: CallbackQuery, settings_storage):
         text = await format_order_detail(order)
         order_id = order.get('orderId')
 
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback,
             text,
             reply_markup=get_order_detail_kb(symbol, order_id)
         )
 
     except Exception as e:
         logger.error(f"Error showing order detail: {e}")
-        await callback.message.edit_text(
+        await safe_edit_or_send(
+            callback,
             f"❌ Ошибка при получении ордера:\n{html.escape(str(e))}"
         )
