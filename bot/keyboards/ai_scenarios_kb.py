@@ -90,13 +90,11 @@ def get_symbols_keyboard(
             builder.button(text=coin, callback_data=f"ai:symbol:{symbol}")
         rows.extend([3, 3] if len(meme_symbols) > 3 else [len(meme_symbols)])
     else:
-        # Основные символы
-        builder.button(text="BTC", callback_data="ai:symbol:BTCUSDT")
-        builder.button(text="ETH", callback_data="ai:symbol:ETHUSDT")
-        builder.button(text="SOL", callback_data="ai:symbol:SOLUSDT")
-        builder.button(text="BNB", callback_data="ai:symbol:BNBUSDT")
-        builder.button(text="HYPE", callback_data="ai:symbol:HYPEUSDT")
-        rows.extend([2, 2, 1])
+        # Основные символы (majors)
+        for symbol in MAJOR_SYMBOLS[:4]:  # BTC, ETH, SOL, BNB
+            coin = symbol.replace("USDT", "")
+            builder.button(text=coin, callback_data=f"ai:symbol:{symbol}")
+        rows.append(4)
 
     # Выбор таймфрейма
     builder.button(text="⏰ 1H", callback_data="ai:timeframe:1h")

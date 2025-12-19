@@ -2299,7 +2299,7 @@ async def ai_execute_trade(callback: CallbackQuery, state: FSMContext, settings_
 # ===== Навигация =====
 
 @router.callback_query(F.data == "ai:back_to_list")
-async def ai_back_to_list(callback: CallbackQuery, state: FSMContext):
+async def ai_back_to_list(callback: CallbackQuery, state: FSMContext, settings_storage):
     """Вернуться к списку сценариев (из деталей)"""
     user_id = callback.from_user.id
     data = await state.get_data()
@@ -2326,8 +2326,22 @@ async def ai_back_to_list(callback: CallbackQuery, state: FSMContext):
     if not scenarios:
         # Нет сценариев - вернуть к выбору символа
         await state.set_state(AIScenarioStates.choosing_symbol)
-        text = "🤖 <b>AI Trading Scenarios</b>\n\n📊 Выбери символ и таймфрейм для анализа:"
-        kb = ai_scenarios_kb.get_symbols_keyboard()
+
+        # Получаем trading_mode из state или settings
+        current_mode = data.get("trading_mode")
+        if not current_mode:
+            settings = await settings_storage.get_settings(user_id)
+            current_mode = settings.default_trading_mode
+
+        registry = get_mode_registry()
+        mode = registry.get_or_default(current_mode)
+
+        text = (
+            f"🤖 <b>AI Trading Scenarios</b>\n"
+            f"{mode.emoji} Mode: <b>{mode.name}</b>\n\n"
+            "📊 Выбери символ и таймфрейм для анализа:"
+        )
+        kb = await _get_symbols_keyboard(user_id, current_mode, "trending")
         try:
             await callback.message.edit_text(text, reply_markup=kb)
         except Exception:
