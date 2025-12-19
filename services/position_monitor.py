@@ -284,10 +284,17 @@ class PositionMonitor(BaseMonitor):
     async def _handle_position_closed(self, user_id: int, snapshot: PositionSnapshot):
         """Обработка полного закрытия позиции"""
 
-        exit_price = snapshot.mark_price
+        # Получаем реальный PnL с биржи
+        closed_pnl_data = await self.client.get_closed_pnl(symbol=snapshot.symbol)
 
-        # Рассчитываем метрики
-        pnl_usd = snapshot.unrealized_pnl
+        if closed_pnl_data:
+            pnl_usd = float(closed_pnl_data.get('closedPnl', snapshot.unrealized_pnl))
+            exit_price = float(closed_pnl_data.get('avgExitPrice', snapshot.mark_price))
+        else:
+            # Fallback к snapshot данным
+            pnl_usd = snapshot.unrealized_pnl
+            exit_price = snapshot.mark_price
+            logger.warning(f"Could not get closed PnL for {snapshot.symbol}, using snapshot")
 
         # Рассчитываем ROE%
         position_value = snapshot.size * snapshot.entry_price
@@ -387,10 +394,17 @@ class PositionMonitor(BaseMonitor):
         closed_size = old_snapshot.size - new_snapshot.size
         percent_closed = (closed_size / old_snapshot.size) * 100
 
-        # PnL пропорционально закрытой части
-        partial_pnl = old_snapshot.unrealized_pnl * (percent_closed / 100)
+        # Получаем реальный PnL с биржи
+        closed_pnl_data = await self.client.get_closed_pnl(symbol=old_snapshot.symbol)
 
-        exit_price = new_snapshot.mark_price
+        if closed_pnl_data:
+            partial_pnl = float(closed_pnl_data.get('closedPnl', 0))
+            exit_price = float(closed_pnl_data.get('avgExitPrice', new_snapshot.mark_price))
+        else:
+            # Fallback - пропорциональный расчёт
+            partial_pnl = old_snapshot.unrealized_pnl * (percent_closed / 100)
+            exit_price = new_snapshot.mark_price
+            logger.warning(f"Could not get closed PnL for {old_snapshot.symbol} partial, using calculated")
 
         # Находим trade_id
         trade = await self.trade_logger.get_open_trade_by_symbol(

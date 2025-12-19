@@ -284,3 +284,43 @@ class PositionsMixin:
         except Exception as e:
             logger.error(f"Error moving SL: {e}")
             raise BybitError(f"Failed to move SL: {str(e)}")
+
+    async def get_closed_pnl(
+        self,
+        symbol: str,
+        limit: int = 1,
+        start_time: Optional[int] = None
+    ) -> Optional[Dict]:
+        """
+        Получить реализованный PnL по закрытым позициям
+
+        Args:
+            symbol: Торговая пара
+            limit: Количество записей
+            start_time: Время начала в мс (опционально)
+
+        Returns:
+            Dict с closedPnl или None
+        """
+        try:
+            params = {
+                'category': config.BYBIT_CATEGORY,
+                'symbol': symbol,
+                'limit': limit
+            }
+
+            if start_time:
+                params['startTime'] = start_time
+
+            response = self.client.get_closed_pnl(**params)
+            result = self._handle_response(response)
+
+            records = result.get('list', [])
+            if not records:
+                return None
+
+            return records[0] if limit == 1 else records
+
+        except Exception as e:
+            logger.error(f"Error getting closed PnL for {symbol}: {e}")
+            return None

@@ -1,6 +1,7 @@
 """
 Хендлеры для действий с позициями: закрытие, partial close, move SL, panic.
 """
+import asyncio
 import html
 import logging
 
@@ -166,32 +167,55 @@ async def close_position_confirmed(callback: CallbackQuery, settings_storage, tr
             # Полное закрытие
             await client.close_position(symbol=symbol)
 
-            # Логируем полное закрытие
+            # Получаем реальный PnL с биржи
+            await asyncio.sleep(0.5)  # Даём время на обработку
+            closed_pnl_data = await client.get_closed_pnl(symbol=symbol)
+
+            if closed_pnl_data:
+                real_pnl = float(closed_pnl_data.get('closedPnl', unrealized_pnl))
+                exit_price = float(closed_pnl_data.get('avgExitPrice', mark_price))
+            else:
+                real_pnl = unrealized_pnl
+                exit_price = mark_price
+                logger.warning(f"Could not get closed PnL for {symbol}, using unrealized: {unrealized_pnl}")
+
+            # Логируем полное закрытие с реальным PnL
             try:
                 await trade_logger.update_trade_on_close(
                     user_id=user_id,
                     symbol=symbol,
-                    exit_price=mark_price,
-                    pnl_usd=unrealized_pnl,
+                    exit_price=exit_price,
+                    pnl_usd=real_pnl,
                     is_partial=False,
                     testnet=testnet
                 )
             except Exception as log_error:
                 logger.error(f"Failed to log full close: {log_error}")
 
-            msg = f"✅ <b>Позиция {symbol} закрыта!</b>\nPnL: ${unrealized_pnl:+.2f}"
+            msg = f"✅ <b>Позиция {symbol} закрыта!</b>\nPnL: ${real_pnl:+.2f}"
         else:
             # Partial close
-            partial_pnl = unrealized_pnl * (percent / 100)
             result = await client.partial_close(symbol=symbol, percent=percent)
 
-            # Логируем частичное закрытие
+            # Получаем реальный PnL с биржи
+            await asyncio.sleep(0.5)
+            closed_pnl_data = await client.get_closed_pnl(symbol=symbol)
+
+            if closed_pnl_data:
+                real_pnl = float(closed_pnl_data.get('closedPnl', 0))
+                exit_price = float(closed_pnl_data.get('avgExitPrice', mark_price))
+            else:
+                real_pnl = unrealized_pnl * (percent / 100)
+                exit_price = mark_price
+                logger.warning(f"Could not get closed PnL for {symbol} partial, using calculated")
+
+            # Логируем частичное закрытие с реальным PnL
             try:
                 await trade_logger.update_trade_on_close(
                     user_id=user_id,
                     symbol=symbol,
-                    exit_price=mark_price,
-                    pnl_usd=partial_pnl,
+                    exit_price=exit_price,
+                    pnl_usd=real_pnl,
                     is_partial=True,
                     testnet=testnet
                 )
@@ -202,7 +226,7 @@ async def close_position_confirmed(callback: CallbackQuery, settings_storage, tr
                 f"✅ <b>Позиция частично закрыта!</b>\n\n"
                 f"Symbol: {symbol}\n"
                 f"Закрыто: {result['closed_qty']} ({percent}%)\n"
-                f"PnL: ${partial_pnl:+.2f}"
+                f"PnL: ${real_pnl:+.2f}"
             )
 
         await safe_edit_or_send(
