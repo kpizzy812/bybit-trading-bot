@@ -99,6 +99,21 @@ AI_SCENARIOS_ENABLED = os.getenv('AI_SCENARIOS_ENABLED', 'true').lower() == 'tru
 
 
 # ============================================================
+# SYNTRA STATS API (read-only statistics)
+# ============================================================
+
+# Включить Stats API
+SYNTRA_STATS_ENABLED = os.getenv('SYNTRA_STATS_ENABLED', 'true').lower() == 'true'
+
+# Stats API Key (отдельный read-only ключ)
+SYNTRA_STATS_API_KEY = os.getenv('SYNTRA_STATS_API_KEY', '')
+
+# Stats API URL (по умолчанию использует SYNTRA_API_URL)
+# Можно указать отдельный URL если Stats API на другом хосте
+SYNTRA_STATS_URL = os.getenv('SYNTRA_STATS_URL', '')  # '' = use SYNTRA_API_URL
+
+
+# ============================================================
 # SYNTRA SUPERVISOR
 # ============================================================
 
