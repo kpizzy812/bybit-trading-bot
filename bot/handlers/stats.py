@@ -63,9 +63,9 @@ def format_date_range(from_ts: Optional[int], to_ts: Optional[int]) -> str:
 def format_ci(ci: Optional[Dict], is_percent: bool = True) -> str:
     """Format confidence interval."""
     if not ci:
-        return "-"
-    lower = ci.get("lower", 0)
-    upper = ci.get("upper", 0)
+        return ""
+    lower = ci.get("lower") or 0
+    upper = ci.get("upper") or 0
     if is_percent:
         return f"({lower*100:.0f}-{upper*100:.0f}%)"
     return f"({lower:.2f}-{upper:.2f})"
@@ -206,19 +206,19 @@ async def show_overview(callback: CallbackQuery):
             )
             return
 
-        # Extract data
-        sample_size = data.get("sample_size", 0)
-        winrate = data.get("winrate", 0)
+        # Extract data (с защитой от None)
+        sample_size = data.get("sample_size") or 0
+        winrate = data.get("winrate") or 0
         winrate_ci = data.get("winrate_ci")
-        expectancy_r = data.get("expectancy_r", 0)
+        expectancy_r = data.get("expectancy_r") or 0
         profit_factor = data.get("profit_factor")
-        net_pnl = data.get("net_pnl_usd", 0)
-        fees = data.get("fees_usd", 0)
-        avg_mae = data.get("avg_mae_r", 0)
-        avg_mfe = data.get("avg_mfe_r", 0)
-        max_dd = data.get("max_drawdown_r", 0)
-        streaks = data.get("streaks", {})
-        by_origin = data.get("by_origin", {})
+        net_pnl = data.get("net_pnl_usd") or 0
+        fees = data.get("fees_usd") or 0
+        avg_mae = data.get("avg_mae_r") or 0
+        avg_mfe = data.get("avg_mfe_r") or 0
+        max_dd = data.get("max_drawdown_r") or 0
+        streaks = data.get("streaks") or {}
+        by_origin = data.get("by_origin") or {}
         from_ts = data.get("from_ts")
         to_ts = data.get("to_ts")
 
@@ -251,12 +251,12 @@ async def show_overview(callback: CallbackQuery):
 """
 
         if ai_stats or manual_stats:
-            ai_count = ai_stats.get("count", 0)
-            ai_wr = ai_stats.get("winrate", 0)
-            ai_ev = ai_stats.get("expectancy_r", 0)
-            manual_count = manual_stats.get("count", 0)
-            manual_wr = manual_stats.get("winrate", 0)
-            manual_ev = manual_stats.get("expectancy_r", 0)
+            ai_count = ai_stats.get("count") or 0
+            ai_wr = ai_stats.get("winrate") or 0
+            ai_ev = ai_stats.get("expectancy_r") or 0
+            manual_count = manual_stats.get("count") or 0
+            manual_wr = manual_stats.get("winrate") or 0
+            manual_ev = manual_stats.get("expectancy_r") or 0
 
             ai_emoji = "✅" if ai_ev > manual_ev else ""
             manual_emoji = "✅" if manual_ev > ai_ev else ""
@@ -321,9 +321,9 @@ async def show_outcomes(callback: CallbackQuery):
             )
             return
 
-        sample_size = data.get("sample_size", 0)
-        distribution = data.get("distribution", {})
-        hit_rates = data.get("hit_rates", {})
+        sample_size = data.get("sample_size") or 0
+        distribution = data.get("distribution") or {}
+        hit_rates = data.get("hit_rates") or {}
         from_ts = data.get("from_ts")
         to_ts = data.get("to_ts")
 
@@ -362,9 +362,9 @@ async def show_outcomes(callback: CallbackQuery):
 """
 
         for outcome_type, label in outcome_labels.items():
-            stats = distribution.get(outcome_type, {})
-            count = stats.get("count", 0)
-            pct = stats.get("pct", 0)
+            stats = distribution.get(outcome_type) or {}
+            count = stats.get("count") or 0
+            pct = stats.get("pct") or 0
             avg_r = stats.get("avg_r")
 
             if count > 0:
@@ -377,12 +377,16 @@ async def show_outcomes(callback: CallbackQuery):
         tp2_rate = hit_rates.get("tp2")
         tp3_rate = hit_rates.get("tp3")
 
-        text += f"""
+        if tp1_rate is not None:
+            tp1_pct = (tp1_rate or 0) * 100
+            tp2_pct = (tp2_rate or 0) * 100
+            tp3_pct = (tp3_rate or 0) * 100
+            text += f"""
 <b>TP Hit Rates:</b>
-├ TP1: {tp1_rate*100:.0f}% reached
-├ TP2: {tp2_rate*100:.0f}%
-└ TP3: {tp3_rate*100:.0f}%
-""" if tp1_rate is not None else ""
+├ TP1: {tp1_pct:.0f}% reached
+├ TP2: {tp2_pct:.0f}%
+└ TP3: {tp3_pct:.0f}%
+"""
 
         await callback.message.edit_text(
             text.strip(),
@@ -443,8 +447,8 @@ async def show_archetypes_list(callback: CallbackQuery):
             )
             return
 
-        archetypes_data = data.get("archetypes", [])
-        total = data.get("total", 0)
+        archetypes_data = data.get("archetypes") or []
+        total = data.get("total") or 0
         total_pages = (total + ARCHETYPES_PER_PAGE - 1) // ARCHETYPES_PER_PAGE
 
         if not archetypes_data:
@@ -460,12 +464,12 @@ async def show_archetypes_list(callback: CallbackQuery):
 
         archetype_names = []
         for arch in archetypes_data:
-            name = arch.get("archetype", "unknown")
-            sample_size = arch.get("sample_size", 0)
-            winrate = arch.get("winrate", 0)
-            expectancy = arch.get("expectancy_r", 0)
+            name = arch.get("archetype") or "unknown"
+            sample_size = arch.get("sample_size") or 0
+            winrate = arch.get("winrate") or 0
+            expectancy = arch.get("expectancy_r") or 0
             profit_factor = arch.get("profit_factor")
-            gate_status = arch.get("gate_status", "enabled")
+            gate_status = arch.get("gate_status") or "enabled"
 
             archetype_names.append(name)
 
@@ -532,18 +536,18 @@ async def show_archetype_detail(callback: CallbackQuery):
             )
             return
 
-        sample_size = data.get("sample_size", 0)
-        winrate = data.get("winrate", 0)
+        sample_size = data.get("sample_size") or 0
+        winrate = data.get("winrate") or 0
         winrate_ci = data.get("winrate_ci")
-        expectancy = data.get("expectancy_r", 0)
+        expectancy = data.get("expectancy_r") or 0
         expectancy_ci = data.get("expectancy_ci")
         profit_factor = data.get("profit_factor")
-        max_dd = data.get("max_drawdown_r", 0)
-        gate_status = data.get("gate_status", "enabled")
+        max_dd = data.get("max_drawdown_r") or 0
+        gate_status = data.get("gate_status") or "enabled"
         gate_reason = data.get("gate_reason")
-        paper = data.get("paper", {})
-        conversion_rate = data.get("conversion_rate", 0)
-        outcomes = data.get("outcomes", {})
+        paper = data.get("paper") or {}
+        conversion_rate = data.get("conversion_rate") or 0
+        outcomes = data.get("outcomes") or {}
 
         wr_ci_str = format_ci(winrate_ci)
         ev_ci_str = format_ci(expectancy_ci, is_percent=False)
@@ -563,9 +567,9 @@ async def show_archetype_detail(callback: CallbackQuery):
 
         # Paper comparison
         if paper:
-            paper_n = paper.get("sample_size", 0)
-            paper_wr = paper.get("winrate", 0)
-            paper_ev = paper.get("expectancy_r", 0)
+            paper_n = paper.get("sample_size") or 0
+            paper_wr = paper.get("winrate") or 0
+            paper_ev = paper.get("expectancy_r") or 0
             text += f"""
 📈 <b>Paper Comparison:</b>
 ├ Paper: n={paper_n}, WR {paper_wr*100:.0f}%, EV {paper_ev:+.2f}R
@@ -633,49 +637,64 @@ async def show_funnel(callback: CallbackQuery):
             )
             return
 
-        stages = data.get("stages", {})
-        dropoff = data.get("dropoff", {})
-        by_archetype = data.get("by_archetype", [])
+        stages = data.get("stages") or {}
+        dropoff = data.get("dropoff") or {}
+        by_archetype = data.get("by_archetype") or []
         from_ts = data.get("from_ts")
         to_ts = data.get("to_ts")
 
         date_range = format_date_range(from_ts, to_ts)
 
-        # Stage data
-        generated = stages.get("generated", {})
-        viewed = stages.get("viewed", {})
-        selected = stages.get("selected", {})
-        placed = stages.get("placed", {})
-        closed = stages.get("closed", {})
+        # Stage data (с защитой от None)
+        generated = stages.get("generated") or {}
+        viewed = stages.get("viewed") or {}
+        selected = stages.get("selected") or {}
+        placed = stages.get("placed") or {}
+        closed = stages.get("closed") or {}
 
-        gen_count = generated.get("count", 0)
+        gen_count = generated.get("count") or 0
 
         # Visual funnel (using block chars)
         def bar(pct: float, max_width: int = 16) -> str:
             filled = int(pct * max_width)
             return "█" * filled + "░" * (max_width - filled)
 
+        # Extract values with None protection
+        viewed_count = viewed.get('count') or 0
+        viewed_pct = viewed.get('pct') or 0
+        selected_count = selected.get('count') or 0
+        selected_pct = selected.get('pct') or 0
+        placed_count = placed.get('count') or 0
+        placed_pct = placed.get('pct') or 0
+        closed_count = closed.get('count') or 0
+        closed_pct = closed.get('pct') or 0
+
+        drop_gen_view = (dropoff.get('generated_to_viewed') or 0) * 100
+        drop_view_sel = (dropoff.get('viewed_to_selected') or 0) * 100
+        drop_sel_place = (dropoff.get('selected_to_placed') or 0) * 100
+        drop_place_close = (dropoff.get('placed_to_closed') or 0) * 100
+
         text = f"""
 📊 <b>Conversion Funnel ({period})</b>
 📅 {date_range}
 
 Generated:  {gen_count:>4} {bar(1.0)} 100%
-   ↓ -{dropoff.get('generated_to_viewed', 0)*100:.0f}%
-Viewed:     {viewed.get('count', 0):>4} {bar(viewed.get('pct', 0))} {viewed.get('pct', 0)*100:.0f}%
-   ↓ -{dropoff.get('viewed_to_selected', 0)*100:.0f}%
-Selected:   {selected.get('count', 0):>4} {bar(selected.get('pct', 0))} {selected.get('pct', 0)*100:.0f}%
-   ↓ -{dropoff.get('selected_to_placed', 0)*100:.0f}%
-Placed:     {placed.get('count', 0):>4} {bar(placed.get('pct', 0))} {placed.get('pct', 0)*100:.0f}%
-   ↓ -{dropoff.get('placed_to_closed', 0)*100:.0f}%
-Closed:     {closed.get('count', 0):>4} {bar(closed.get('pct', 0))} {closed.get('pct', 0)*100:.0f}%
+   ↓ -{drop_gen_view:.0f}%
+Viewed:     {viewed_count:>4} {bar(viewed_pct)} {viewed_pct*100:.0f}%
+   ↓ -{drop_view_sel:.0f}%
+Selected:   {selected_count:>4} {bar(selected_pct)} {selected_pct*100:.0f}%
+   ↓ -{drop_sel_place:.0f}%
+Placed:     {placed_count:>4} {bar(placed_pct)} {placed_pct*100:.0f}%
+   ↓ -{drop_place_close:.0f}%
+Closed:     {closed_count:>4} {bar(closed_pct)} {closed_pct*100:.0f}%
 """
 
         # Top converting archetypes
         if by_archetype:
             text += "\n🔝 <b>Top Converting:</b>\n"
             for arch in by_archetype[:3]:
-                name = arch.get("archetype", "")[:15]
-                rate = arch.get("conversion_rate", 0)
+                name = (arch.get("archetype") or "")[:15]
+                rate = arch.get("conversion_rate") or 0
                 text += f"├ {name}: {rate*100:.0f}%\n"
 
         await callback.message.edit_text(
@@ -731,10 +750,10 @@ async def show_gates(callback: CallbackQuery):
         disabled = []
 
         for gate in data:
-            name = gate.get("archetype", "unknown")
-            status = gate.get("status", "enabled")
-            real_ev = gate.get("real_ev", 0)
-            sample_size = gate.get("sample_size", 0)
+            name = gate.get("archetype") or "unknown"
+            status = gate.get("status") or "enabled"
+            real_ev = gate.get("real_ev") or 0
+            sample_size = gate.get("sample_size") or 0
 
             entry = f"<code>{html.escape(name[:20])}</code> EV:{real_ev:+.2f}R n={sample_size}"
 
