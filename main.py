@@ -12,6 +12,7 @@ from bot.handlers import start, menu, positions, settings, history
 from bot.handlers import trade_wizard, ai_scenarios, scenario_editor
 from bot.handlers import supervisor as supervisor_handler
 from bot.handlers import ev_stats
+from bot.handlers import stats as stats_handler
 from bot.middlewares.owner_check import OwnerCheckMiddleware
 from storage.user_settings import create_storage_instances
 from services.trade_logger import create_trade_logger
@@ -21,6 +22,7 @@ from services.entry_plan import create_entry_plan_monitor
 from services.breakeven_manager import create_breakeven_manager
 from services.post_sl_analyzer import create_post_sl_analyzer
 from services.supervisor_client import get_supervisor_client
+from services.stats_client import close_stats_client
 
 
 class InterceptHandler(logging.Handler):
@@ -223,6 +225,11 @@ async def main():
         dp.include_router(ev_stats.router)
         logger.info("🤖 AI Scenarios enabled")
 
+    # Stats handlers (Stats API integration)
+    if config.SYNTRA_STATS_ENABLED:
+        dp.include_router(stats_handler.router)
+        logger.info("📊 Stats handlers registered")
+
     dp.include_router(trade_wizard.router)
 
     # Supervisor handlers (если включено)
@@ -249,6 +256,7 @@ async def main():
         await settings_storage.close()
         await lock_manager.close()
         await trade_logger.close()
+        await close_stats_client()
         # Close PostgreSQL
         if config.POSTGRES_ENABLED:
             try:

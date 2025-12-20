@@ -36,6 +36,10 @@ def get_settings_menu_kb() -> InlineKeyboardMarkup:
     )
 
     builder.row(
+        InlineKeyboardButton(text="📊 Stats", callback_data="show_stats_menu")
+    )
+
+    builder.row(
         InlineKeyboardButton(text="◀️ Назад", callback_data="set_back_to_main")
     )
 
