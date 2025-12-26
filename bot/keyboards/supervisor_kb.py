@@ -51,8 +51,8 @@ def get_advice_keyboard(
             callback_data=f"sv:reject:{trade_id}:all"
         ),
         InlineKeyboardButton(
-            text="🔇 Mute 30m",
-            callback_data=f"sv:mute:{trade_id}:30"
+            text="🔇 Mute 24h",
+            callback_data=f"sv:mute:{trade_id}:1440"
         )
     )
 
