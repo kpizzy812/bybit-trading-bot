@@ -218,7 +218,7 @@ class EntryPlanMonitor(BaseMonitor):
 
             # DEBUG: логируем источник цены для диагностики
             ticker_symbol = ticker.get('symbol', 'UNKNOWN')
-            logger.info(
+            logger.debug(
                 f"Activation check: plan.symbol={plan.symbol}, "
                 f"ticker.symbol={ticker_symbol}, markPrice={current_price:.2f}"
             )
