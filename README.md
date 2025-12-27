@@ -1,11 +1,19 @@
-# Bybit Futures Trading Bot
+<p align="center">
+  <img src="assets/logo.jpeg" alt="Deep Signal" width="200"/>
+</p>
 
-[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
-[![License](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
-[![Telegram](https://img.shields.io/badge/Platform-Telegram-blue.svg)](https://telegram.org)
-[![Bybit](https://img.shields.io/badge/Exchange-Bybit-orange.svg)](https://bybit.com)
+<h1 align="center">Deep Signal</h1>
 
-**[Русская версия](README.ru.md)**
+<p align="center">
+  <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.12+-blue.svg" alt="Python"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-Proprietary-red.svg" alt="License"/></a>
+  <a href="https://telegram.org"><img src="https://img.shields.io/badge/Platform-Telegram-blue.svg" alt="Telegram"/></a>
+  <a href="https://bybit.com"><img src="https://img.shields.io/badge/Exchange-Bybit-orange.svg" alt="Bybit"/></a>
+</p>
+
+<p align="center">
+  <b><a href="README.ru.md">Русская версия</a></b>
+</p>
 
 Professional Telegram bot for Bybit USDT Perpetual futures trading with automated risk management and AI-powered trade scenarios.
 
