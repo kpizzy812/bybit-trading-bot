@@ -1,381 +1,255 @@
-# Bybit Trading Bot
+# Bybit Futures Trading Bot
 
-Telegram-бот для трейдинга на Bybit с автоматическим управлением рисками и интеграцией AI-аналитики.
+[![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
+[![License](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
+[![Telegram](https://img.shields.io/badge/Platform-Telegram-blue.svg)](https://telegram.org)
+[![Bybit](https://img.shields.io/badge/Exchange-Bybit-orange.svg)](https://bybit.com)
 
-## Возможности
+**[Русская версия](README.ru.md)**
 
-- **Автоматический расчёт размера позиции** от риска (`qty = risk_$ / |entry - stop|`)
-- **Обязательные SL/TP** при каждом входе
-- **Trade Wizard** - пошаговый процесс открытия сделки
-- **AI Scenarios** - интеграция с Syntra AI для анализа рынка
-- **Position Monitor** - мониторинг позиций в реальном времени с уведомлениями
-- **Auto Breakeven** - автоматический перенос SL на entry после TP1
-- **Post-SL Analysis** - анализ поведения цены после стоп-лосса
-- **Trade History** - журнал всех сделок с детальной статистикой
-- **Testnet/Live режимы** для тестирования и реальной торговли
-- **Защита от race conditions** с Redis locks
-- **Точное округление** через Decimal
+Professional Telegram bot for Bybit USDT Perpetual futures trading with automated risk management and AI-powered trade scenarios.
 
-## Поддерживаемые инструменты
+## Features
 
-- BTCUSDT
-- ETHUSDT
-- SOLUSDT
-- BNBUSDT
-- HYPEUSDT
+- **Trade Wizard** — Step-by-step position opening with validation at each stage
+- **Auto Position Sizing** — Calculates quantity from risk: `qty = risk_$ / |entry - stop|`
+- **Mandatory SL/TP** — Every trade requires stop-loss and take-profit levels
+- **Position Monitor** — Real-time PnL tracking with notifications
+- **AI Scenarios** — Integration with external AI analytics API for trade scenarios
+- **Auto Breakeven** — Automatically moves SL to entry after TP1 hit
+- **Trade History** — Complete journal with statistics and winrate
+- **Testnet/Live** — Seamless switching between paper trading and live
+- **Race Condition Protection** — Redis locks prevent duplicate orders
 
-## Установка
+## Supported Instruments
 
-### 1. Клонирование репозитория
+| Symbol | Description |
+|--------|-------------|
+| BTCUSDT | Bitcoin Perpetual |
+| ETHUSDT | Ethereum Perpetual |
+| SOLUSDT | Solana Perpetual |
+| BNBUSDT | BNB Perpetual |
+| HYPEUSDT | Hyperliquid Perpetual |
 
-```bash
-git clone <repo-url>
-cd "Futures Bot"
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     TELEGRAM BOT (aiogram)                       │
+│  - Trade Wizard FSM                                              │
+│  - Position Management                                           │
+│  - Settings & History                                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      SERVICES LAYER                              │
+│  - Risk Calculator (Decimal precision)                          │
+│  - Position Monitor (background tasks)                          │
+│  - Trade Logger (statistics)                                    │
+│  - Syntra Client (AI scenarios API)                             │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+        ┌──────────┐   ┌──────────┐   ┌──────────────┐
+        │  Bybit   │   │  Redis   │   │  PostgreSQL  │
+        │  API V5  │   │  Cache   │   │   Database   │
+        └──────────┘   └──────────┘   └──────────────┘
 ```
 
-### 2. Создание виртуального окружения
+## Project Structure
+
+```
+futures-bot/
+├── bot/
+│   ├── handlers/
+│   │   ├── trade_wizard/     # 8-step trade wizard
+│   │   ├── positions.py      # Position management
+│   │   ├── settings.py       # User settings
+│   │   ├── history.py        # Trade history
+│   │   └── ai_scenarios.py   # AI scenarios integration
+│   ├── keyboards/            # Inline/Reply keyboards
+│   ├── states/               # FSM states
+│   └── middlewares/          # Owner check, logging
+├── services/
+│   ├── bybit/                # Bybit API V5 client
+│   │   ├── client.py         # Base client
+│   │   ├── orders.py         # Order management
+│   │   ├── positions.py      # Position queries
+│   │   └── market_data.py    # Tickers, instruments
+│   ├── risk_calculator.py    # Position sizing
+│   ├── position_monitor.py   # Background monitoring
+│   ├── trade_logger.py       # Trade journal
+│   └── syntra_client.py      # AI API client
+├── database/                 # SQLAlchemy models
+├── storage/                  # Redis/settings storage
+├── utils/                    # Validators, formatters
+├── alembic/                  # DB migrations
+├── main.py                   # Entry point
+├── config.py                 # Configuration
+└── requirements.txt
+```
+
+## Installation
+
+### Prerequisites
+
+- Python 3.12+
+- Redis (optional, falls back to in-memory)
+- PostgreSQL (for trade history)
+
+### Setup
 
 ```bash
+# Clone repository
+git clone https://github.com/yourusername/bybit-trading-bot.git
+cd bybit-trading-bot
+
+# Create virtual environment
 python3 -m venv venv
-source venv/bin/activate  # На Windows: venv\Scripts\activate
-```
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-### 3. Установка зависимостей
-
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-### 4. Настройка переменных окружения
-
-Скопируйте `.env.example` в `.env` и заполните необходимые данные:
-
-```bash
+# Configure environment
 cp .env.example .env
+# Edit .env with your credentials
 ```
 
-Отредактируйте `.env`:
+### Environment Variables
 
 ```bash
-# Telegram Bot Token (получить у @BotFather)
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-
-# Bybit API Keys (ТОЛЬКО Trade права, БЕЗ Withdraw!)
-BYBIT_API_KEY=your_api_key_here
-BYBIT_API_SECRET=your_api_secret_here
-
-# Bybit Testnet API (для тестирования)
-BYBIT_TESTNET_API_KEY=your_testnet_api_key_here
-BYBIT_TESTNET_API_SECRET=your_testnet_api_secret_here
-
-# Owner ID (только этот пользователь сможет использовать бота)
+# Telegram
+TELEGRAM_BOT_TOKEN=your_bot_token
 OWNER_TELEGRAM_ID=123456789
 
-# Syntra AI (опционально, для AI-аналитики)
-SYNTRA_API_URL=http://localhost:8000
-SYNTRA_API_KEY=
-SYNTRA_API_TIMEOUT=180
-AI_SCENARIOS_ENABLED=true
+# Bybit API (Trade permissions ONLY, NO Withdraw!)
+BYBIT_API_KEY=your_api_key
+BYBIT_API_SECRET=your_api_secret
 
-# Redis (опционально)
+# Bybit Testnet (recommended for testing)
+BYBIT_TESTNET_API_KEY=your_testnet_key
+BYBIT_TESTNET_API_SECRET=your_testnet_secret
+
+# Redis (optional)
 REDIS_HOST=localhost
 REDIS_PORT=6379
-REDIS_DB=0
-REDIS_PASSWORD=
 
-# Bot Settings
-DEFAULT_TESTNET_MODE=true
-LOG_LEVEL=INFO
+# AI Scenarios API (optional)
+SYNTRA_API_URL=http://localhost:8000
+SYNTRA_API_KEY=your_api_key
 ```
 
-### 5. Установка Redis (опционально)
-
-Redis используется для:
-- Хранения настроек пользователей
-- Trade locks (защита от race conditions)
-- FSM storage (опционально)
-
-**macOS:**
-```bash
-brew install redis
-brew services start redis
-```
-
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install redis-server
-sudo systemctl start redis
-```
-
-**Без Redis:**
-Бот автоматически использует in-memory хранилище.
-
-## Запуск
+### Running
 
 ```bash
 python main.py
 ```
 
-Логи будут сохраняться в `bot.log`.
+## Usage
 
-## Получение Bybit API ключей
-
-### Testnet (рекомендуется для начала)
-
-1. Зарегистрируйтесь на [Bybit Testnet](https://testnet.bybit.com/)
-2. Перейдите в API Management
-3. Создайте API ключ с правами **только Trade** (БЕЗ Withdraw!)
-4. Скопируйте API Key и API Secret в `.env`
-
-### Live (для реальной торговли)
-
-1. Перейдите на [Bybit.com](https://www.bybit.com/)
-2. Перейдите в API Management
-3. Создайте API ключ с правами **только Trade** (БЕЗ Withdraw!)
-4. Включите IP whitelist для безопасности
-5. Скопируйте API Key и API Secret в `.env`
-
-**⚠️ ВАЖНО:**
-- API ключ должен иметь ТОЛЬКО права Trade
-- НИКОГДА не давайте права Withdraw
-- Начинайте с Testnet для проверки
-
-## Использование
-
-### 1. Запуск бота
-
-```bash
-/start
-```
-
-Вы увидите главное меню с кнопками:
-- ➕ Открыть сделку
-- 🤖 AI Scenarios - AI-анализ рынка
-- 📊 Позиции
-- ⚙️ Настройки
-- 🧾 История
-- 🧪 Testnet/Live
-
-### 2. Открытие сделки
-
-Нажмите "➕ Открыть сделку" и следуйте визарду:
-
-1. **Выбор инструмента:** BTCUSDT, ETHUSDT, SOLUSDT, etc.
-2. **Направление:** Long или Short
-3. **Тип входа:** Market или Limit
-4. **Стоп:** Обязательная цена стоп-лосса
-5. **Риск и плечо:** $5/$10/$15, 2x/3x/5x
-6. **Тейки:** Single TP, Ladder или по RR
-7. **Подтверждение:** Проверка карточки сделки
-
-### 3. Мониторинг позиций
-
-Нажмите "📊 Позиции" для просмотра:
-- Открытых позиций с PnL
-- Unrealized/Realized PnL
-- SL/TP статусы
-- Действия: передвинуть SL, частично закрыть, закрыть полностью
-
-### 4. Настройки
-
-Нажмите "⚙️ Настройки" для изменения:
-- Дефолтный риск ($5, $10, $15)
-- Дефолтное плечо (2x, 3x, 5x)
-- Режим маржи (Isolated/Cross)
-- Включение/выключение шортов
-- Шаблон TP (RR/ladder/single)
-- Лимиты безопасности (макс. риск/маржа)
-
-### 5. Переключение Testnet/Live
-
-Нажмите "🧪 Testnet/Live" для переключения режима.
-
-**⚠️ ВСЕГДА тестируйте на Testnet перед Live!**
-
-## Архитектура проекта
+### Main Menu
 
 ```
-futures-bot/
-├── config.py                  # Конфигурация
-├── main.py                    # Точка входа
-├── bot/
-│   ├── handlers/
-│   │   ├── start.py           # /start команда
-│   │   ├── menu.py            # Главное меню
-│   │   ├── positions.py       # Управление позициями
-│   │   ├── settings.py        # Настройки пользователя
-│   │   ├── history.py         # История сделок
-│   │   ├── ai_scenarios.py    # AI-аналитика (Syntra AI)
-│   │   └── trade_wizard/      # Пошаговое открытие сделки
-│   │       ├── symbol_side.py # Выбор инструмента и направления
-│   │       ├── entry.py       # Цена входа
-│   │       ├── stop.py        # Стоп-лосс
-│   │       ├── risk_leverage.py # Риск и плечо
-│   │       ├── take_profit.py # Тейк-профит
-│   │       ├── confirmation.py # Подтверждение сделки
-│   │       ├── navigation.py  # Навигация по визарду
-│   │       └── utils.py       # Утилиты визарда
-│   ├── keyboards/             # Inline клавиатуры
-│   │   ├── main_menu.py
-│   │   ├── trade_kb.py
-│   │   ├── positions_kb.py
-│   │   ├── settings_kb.py
-│   │   ├── history_kb.py
-│   │   └── ai_scenarios_kb.py
-│   ├── states/
-│   │   └── trade_states.py    # FSM состояния
-│   └── middlewares/
-│       └── owner_check.py     # Проверка владельца
-├── services/
-│   ├── bybit/                 # Bybit API V5
-│   │   ├── client.py          # Base client
-│   │   ├── orders.py          # Работа с ордерами
-│   │   ├── positions.py       # Работа с позициями
-│   │   ├── trading_stop.py    # SL/TP
-│   │   ├── wallet.py          # Баланс
-│   │   └── market_data.py     # Рыночные данные
-│   ├── risk_calculator.py     # Расчёт размера позиции
-│   ├── position_monitor.py    # Мониторинг позиций
-│   ├── order_monitor.py       # Мониторинг ордеров
-│   ├── breakeven_manager.py   # Auto Breakeven
-│   ├── trade_logger.py        # Журнал сделок (Redis)
-│   ├── post_sl_analyzer.py    # Анализ после SL
-│   └── syntra_client.py       # Клиент Syntra AI API
-├── storage/
-│   └── user_settings.py       # Redis storage + trade locks
-├── utils/
-│   └── validators.py          # Decimal-округление, валидация
-└── docs/
-    └── AI_ANALYSIS/           # Документация по Syntra AI
+┌─────────────────────────────────────┐
+│  [+] Open Trade    [Chart] Positions│
+│  [Gear] Settings   [Doc] History    │
+│  [Test] Testnet/Live                │
+└─────────────────────────────────────┘
 ```
 
-## Критичные детали реализации
+### Trade Wizard Flow
 
-### 1. Правильная формула риска
+1. **Symbol** — Select trading pair (BTC, ETH, SOL...)
+2. **Direction** — Long or Short
+3. **Entry Type** — Market or Limit
+4. **Stop Loss** — Required! By price or percentage
+5. **Risk & Leverage** — $5/$10/$15, 2x/3x/5x
+6. **Take Profit** — Single TP, Ladder, or by RR
+7. **Confirmation** — Review and execute
+
+### Position Management
+
+- View open positions with live PnL
+- Partial close (25%, 50%, 75%)
+- Move stop-loss (breakeven, trail)
+- Panic close all positions
+
+## AI Scenarios Integration
+
+The bot integrates with an external AI analytics API (Syntra AI) that provides:
+
+- **Trade scenarios** with entry, stop-loss, and take-profit levels
+- **Confidence scoring** based on market analysis
+- **One-tap execution** — apply scenario with automatic position sizing
+
+```
+┌─────────────────────────────────────────────┐
+│           SYNTRA AI (Analytics)             │
+│  - Market analysis & technical indicators   │
+│  - Trade scenarios (entry/SL/TP)            │
+│  - Confidence scoring                       │
+└─────────────────────────────────────────────┘
+                     │ JSON API
+                     ▼
+┌─────────────────────────────────────────────┐
+│           TRADE BOT (Executor)              │
+│  - Receives scenarios from AI              │
+│  - Calculates position size from risk      │
+│  - Executes via Bybit API                   │
+└─────────────────────────────────────────────┘
+```
+
+## Security
+
+- **API Keys**: Trade-only permissions, **NEVER** enable Withdraw
+- **Confirmation**: Every trade requires manual confirmation
+- **Race Protection**: Redis locks prevent duplicate orders
+- **Idempotency**: Unique `clientOrderId` for each order
+- **Rollback**: Auto-close position if SL setup fails
+- **Limits**: Configurable max risk/margin per trade
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|------------|
+| Bot Framework | aiogram 3.x |
+| Async HTTP | aiohttp |
+| Database | PostgreSQL + SQLAlchemy |
+| Cache | Redis |
+| Migrations | Alembic |
+| Exchange | Bybit API V5 |
+
+## Risk Calculation
+
+The bot uses the **correct** risk formula:
 
 ```python
-# ✅ ПРАВИЛЬНО
+# Position size from fixed risk
 qty = risk_usd / abs(entry_price - stop_price)
+
+# Required margin
 margin = (qty * entry_price) / leverage
 
-# ❌ НЕПРАВИЛЬНО
-# qty = risk_usd / (abs(entry_price - stop_price) * leverage)  # leverage не влияет на PnL!
+# Leverage does NOT affect PnL, only margin requirement
 ```
 
-### 2. Округление через Decimal
-
-```python
-from decimal import Decimal, ROUND_DOWN
-
-def round_qty(qty: float, qty_step: float) -> str:
-    qty_dec = Decimal(str(qty))
-    step_dec = Decimal(str(qty_step))
-    rounded = (qty_dec / step_dec).quantize(Decimal('1'), rounding=ROUND_DOWN) * step_dec
-    return str(rounded)
-```
-
-**⚠️ НИКОГДА не используйте `qty % qty_step` - даёт float артефакты!**
-
-### 3. wait_until_filled() для Market ордеров
-
-```python
-# avgPrice может быть 0 сразу после place_order
-# Нужен retry с timeout
-order = await bybit.wait_until_filled(order_id, timeout=10)
-avg_price = float(order['avgPrice'])
-```
-
-### 4. Race Condition Protection
-
-```python
-# Redis lock перед выполнением сделки
-if not await lock_manager.acquire_lock(user_id):
-    await message.answer("⏳ Trade in progress...")
-    return
-
-try:
-    # ... выполнение сделки ...
-finally:
-    await lock_manager.release_lock(user_id)
-```
-
-### 5. Ликвидация - осторожно!
-
-Используйте `liqPrice` из API позиции, если доступно.
-Упрощённая формула часто неточна.
-
-## Безопасность
-
-✅ API ключ ТОЛЬКО с правами Trade (БЕЗ Withdraw)
-✅ Все ключи в .env (НЕ в коде, добавить .env в .gitignore)
-✅ Обязательный confirm step перед сделкой
-✅ Защита от дабл-клика: `clientOrderId = uuid4()`
-✅ Лимиты на макс. риск/маржу
-✅ Начинать с Testnet
-✅ Rollback при ошибке (если SL не установился → закрыть позицию)
-
-## Статус разработки
-
-**Реализовано:**
-- Bybit API V5 client (orders, positions, wallet, market data)
-- Risk calculator с правильной формулой
-- Trade Wizard (полный flow открытия сделки)
-- Position management (просмотр, закрытие, передвижение SL)
-- User settings (риск, плечо, маржа, TP режимы)
-- Trade history с детальной статистикой
-- Position Monitor с уведомлениями
-- Auto Breakeven после TP1
-- Post-SL Analysis
-- AI Scenarios (интеграция с Syntra AI)
-- Owner-only режим
-- Redis storage + in-memory fallback
-
-## Troubleshooting
-
-### Бот не запускается
-
-1. Проверьте `.env` файл (скопировали из `.env.example`?)
-2. Проверьте `TELEGRAM_BOT_TOKEN`
-3. Проверьте установку зависимостей: `pip install -r requirements.txt`
-
-### "Insufficient balance" ошибка
-
-1. Проверьте баланс на Bybit (Testnet или Live)
-2. Уменьшите риск или плечо
-3. Убедитесь, что используете правильный режим (Testnet/Live)
-
-### "Invalid qty/price" ошибка
-
-Это означает, что qty или price не соответствуют правилам Bybit (qtyStep, tickSize).
-Бот автоматически округляет, но если ошибка всё равно возникает:
-
-1. Проверьте логи для деталей
-2. Проверьте instrument info для символа
-3. Попробуйте больший риск (может быть ниже minNotional)
-
-### Redis не подключается
-
-Бот автоматически fallback на in-memory хранилище.
-Для production рекомендуется Redis.
-
-## Contributing
-
-Pull requests are welcome! For major changes, please open an issue first.
+All calculations use `Decimal` for precision to avoid floating-point errors.
 
 ## License
 
-MIT
+This project is proprietary software. See [LICENSE](LICENSE) for details.
 
 ## Disclaimer
 
-**⚠️ ВНИМАНИЕ:**
+**This software is for educational purposes only.**
 
-Этот бот предназначен для образовательных целей.
-Торговля криптовалютами сопряжена с высоким риском.
+- Trading cryptocurrencies involves significant risk
+- Past performance does not guarantee future results
+- Never risk more than you can afford to lose
+- Always start with Testnet before using real funds
+- The author is not responsible for any financial losses
 
-- Используйте на свой страх и риск
-- Начинайте с Testnet
-- Никогда не рискуйте больше, чем можете позволить себе потерять
-- Автор не несёт ответственности за ваши убытки
-
-**Trade responsibly!** 🚀
+**Trade responsibly!**

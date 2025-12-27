@@ -1,3 +1,9 @@
+# SyntraAI (separate project)
+SyntraAI/
+
+# Claude Code
+.claude/
+
 # Environment
 .env
 .env.local
