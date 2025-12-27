@@ -15,48 +15,64 @@
   <b><a href="README.ru.md">Русская версия</a></b>
 </p>
 
-Professional Telegram bot for Bybit USDT Perpetual futures trading with automated risk management and AI-powered trade scenarios.
+Professional Telegram bot for Bybit USDT Perpetual futures trading with automated risk management, AI-powered trade scenarios, and real-time position monitoring.
 
-## Features
+## Key Features
 
-- **Trade Wizard** — Step-by-step position opening with validation at each stage
-- **Auto Position Sizing** — Calculates quantity from risk: `qty = risk_$ / |entry - stop|`
-- **Mandatory SL/TP** — Every trade requires stop-loss and take-profit levels
-- **Position Monitor** — Real-time PnL tracking with notifications
-- **AI Scenarios** — Integration with external AI analytics API for trade scenarios
-- **Auto Breakeven** — Automatically moves SL to entry after TP1 hit
-- **Trade History** — Complete journal with statistics and winrate
-- **Testnet/Live** — Seamless switching between paper trading and live
-- **Race Condition Protection** — Redis locks prevent duplicate orders
+### Trading Core
+- **Trade Wizard** — 8-step position opening with validation at each stage
+- **Auto Position Sizing** — Risk-based calculation: `qty = risk_usd / |entry - stop|`
+- **Mandatory SL/TP** — Every trade requires stop-loss; take-profit supports Single, Ladder, or RR modes
+- **Dynamic Symbols** — Universe Service with auto-discovery of top coins by category (Popular, Gainers, Losers, Volatile, Trending)
 
-## Supported Instruments
+### AI Integration
+- **AI Scenarios** — Integration with Syntra AI for trade scenario generation with entry/SL/TP levels and confidence scoring
+- **Ladder Entry (Risk-on-Plan)** — Multi-order entry automation with weighted distribution and auto-downgrade
+- **Supervisor Advisory** — Real-time recommendations for position adjustments (SL/TP moves, early exit)
+- **Feedback Loop** — Automatic feedback collection for AI model improvement
 
-| Symbol | Description |
-|--------|-------------|
-| BTCUSDT | Bitcoin Perpetual |
-| ETHUSDT | Ethereum Perpetual |
-| SOLUSDT | Solana Perpetual |
-| BNBUSDT | BNB Perpetual |
-| HYPEUSDT | Hyperliquid Perpetual |
+### Risk Management
+- **Real EV Tracking** — Expected Value calculation with auto-disable for losing strategies
+- **Confidence-based Risk Scaling** — Automatic risk adjustment based on AI confidence (0.7x–1.3x)
+- **Safety Gates** — Hard limits: max risk $20, max margin $150, max leverage 10x
+- **Trading Modes** — Conservative, Standard, High Risk, Meme with appropriate filters
+
+### Position Management
+- **Real-time Monitor** — Background PnL tracking every 15 seconds
+- **Auto Breakeven** — Automatic SL move to entry after TP1 hit
+- **Post-SL Analysis** — Price tracking 1h/4h after stop-loss to evaluate SL quality
+- **Partial Close** — Support for ladder take-profits with partial position closing
+
+### Analytics
+- **Trade History** — Complete journal with filtering by symbol, date, outcome
+- **Statistics Dashboard** — Win rate, avg PnL, max drawdown, archetype breakdown
+- **Funnel Analysis** — Gate performance tracking (Entry → TP1 → TP2 → TP3)
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     TELEGRAM BOT (aiogram)                       │
-│  - Trade Wizard FSM                                              │
-│  - Position Management                                           │
-│  - Settings & History                                            │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    TELEGRAM BOT (aiogram 3.x)                     │
+│  ├─ Trade Wizard FSM (8 steps)                                   │
+│  ├─ AI Scenarios (view, edit, execute)                           │
+│  ├─ Position Management (monitor, edit SL/TP, close)             │
+│  ├─ Supervisor Advice (notifications, quick actions)             │
+│  └─ Statistics Dashboard (inline UI)                             │
+└──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      SERVICES LAYER                              │
-│  - Risk Calculator (Decimal precision)                          │
-│  - Position Monitor (background tasks)                          │
-│  - Trade Logger (statistics)                                    │
-│  - Syntra Client (AI scenarios API)                             │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                      SERVICES LAYER                               │
+│                                                                   │
+│  Trading:                    │  AI & Analytics:                  │
+│  ├─ RiskCalculator           │  ├─ SyntraClient (scenarios)      │
+│  ├─ PositionMonitor          │  ├─ SupervisorClient (advisory)   │
+│  ├─ OrderMonitor             │  ├─ StatsClient (statistics)      │
+│  ├─ EntryPlanMonitor         │  ├─ RealEVCalculator              │
+│  ├─ BreakevenManager         │  ├─ UniverseService               │
+│  ├─ PostSLAnalyzer           │  └─ FeedbackCollector             │
+│  └─ TradeLogger              │                                   │
+└──────────────────────────────────────────────────────────────────┘
                               │
               ┌───────────────┼───────────────┐
               ▼               ▼               ▼
@@ -69,35 +85,68 @@ Professional Telegram bot for Bybit USDT Perpetual futures trading with automate
 ## Project Structure
 
 ```
-futures-bot/
+deep-signal/
 ├── bot/
 │   ├── handlers/
-│   │   ├── trade_wizard/     # 8-step trade wizard
-│   │   ├── positions.py      # Position management
-│   │   ├── settings.py       # User settings
-│   │   ├── history.py        # Trade history
-│   │   └── ai_scenarios.py   # AI scenarios integration
-│   ├── keyboards/            # Inline/Reply keyboards
-│   ├── states/               # FSM states
-│   └── middlewares/          # Owner check, logging
+│   │   ├── trade_wizard/        # 8-step trade wizard (modular)
+│   │   ├── positions/           # Position management
+│   │   ├── ai_scenarios/        # AI scenario handling
+│   │   ├── supervisor.py        # Advisory notifications
+│   │   ├── stats.py             # Statistics dashboard
+│   │   ├── history.py           # Trade history
+│   │   ├── settings.py          # User preferences
+│   │   └── ev_stats.py          # Real EV tracking
+│   ├── keyboards/               # Inline/Reply keyboards
+│   ├── states/                  # FSM states
+│   └── middlewares/             # Owner check, logging
 ├── services/
-│   ├── bybit/                # Bybit API V5 client
-│   │   ├── client.py         # Base client
-│   │   ├── orders.py         # Order management
-│   │   ├── positions.py      # Position queries
-│   │   └── market_data.py    # Tickers, instruments
-│   ├── risk_calculator.py    # Position sizing
-│   ├── position_monitor.py   # Background monitoring
-│   ├── trade_logger.py       # Trade journal
-│   └── syntra_client.py      # AI API client
-├── database/                 # SQLAlchemy models
-├── storage/                  # Redis/settings storage
-├── utils/                    # Validators, formatters
-├── alembic/                  # DB migrations
-├── main.py                   # Entry point
-├── config.py                 # Configuration
-└── requirements.txt
+│   ├── bybit/                   # Bybit API V5 client
+│   ├── entry_plan/              # Ladder entry automation
+│   ├── real_ev/                 # Expected Value calculation
+│   ├── feedback/                # AI feedback collection
+│   ├── trading_modes/           # Mode-based symbol filtering
+│   ├── universe/                # Dynamic symbol discovery
+│   ├── risk_calculator.py       # Position sizing
+│   ├── position_monitor.py      # Real-time PnL (685 lines)
+│   ├── syntra_client.py         # AI scenarios API
+│   ├── supervisor_client.py     # Advisory API
+│   ├── stats_client.py          # Statistics API
+│   ├── breakeven_manager.py     # Auto breakeven
+│   ├── post_sl_analyzer.py      # Post-SL analysis
+│   └── trade_logger.py          # Trade journal (1017 lines)
+├── database/                    # SQLAlchemy models
+├── storage/                     # Redis client, settings
+├── utils/                       # Validators, formatters
+├── alembic/                     # DB migrations
+├── config.py                    # Centralized configuration
+└── main.py                      # Entry point
 ```
+
+## Unique Implementation Details
+
+### Risk-on-Plan Model for Ladder Entry
+
+Ensures total risk to SL is **always ≤ risk_usd**, regardless of how many entry orders fill:
+
+```python
+P_avg = Σ(w_i * p_i)           # Weighted average entry price
+Q_total = R / |P_avg - SL|     # Total position size
+Q_i = Q_total * w_i            # Size per order
+```
+
+**Auto-downgrade**: If qty is insufficient for all orders, system automatically reduces order count while preserving best prices.
+
+### Activation Buffer for Touch-Plans
+
+When AI specifies `activation_type: touch`, system adds 0.5% buffer to activation_level to place orders before price reaches first entry.
+
+### Outcome Classification V2
+
+Framework for trade outcome classification:
+- `sl_early` — SL hit before TP1 (full loss -1R)
+- `be_after_tp1` — Exited at breakeven after TP1
+- `stop_in_profit` — Trail SL in profit
+- `tp1/tp2/tp3_final` — Final exit at targets
 
 ## Installation
 
@@ -105,23 +154,19 @@ futures-bot/
 
 - Python 3.12+
 - Redis (optional, falls back to in-memory)
-- PostgreSQL (for trade history)
+- PostgreSQL (for trade history and analytics)
 
 ### Setup
 
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/bybit-trading-bot.git
-cd bybit-trading-bot
+git clone https://github.com/yourusername/deep-signal.git
+cd deep-signal
 
-# Create virtual environment
 python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Configure environment
 cp .env.example .env
 # Edit .env with your credentials
 ```
@@ -137,17 +182,22 @@ OWNER_TELEGRAM_ID=123456789
 BYBIT_API_KEY=your_api_key
 BYBIT_API_SECRET=your_api_secret
 
-# Bybit Testnet (recommended for testing)
+# Bybit Testnet
 BYBIT_TESTNET_API_KEY=your_testnet_key
 BYBIT_TESTNET_API_SECRET=your_testnet_secret
 
-# Redis (optional)
+# Redis
 REDIS_HOST=localhost
 REDIS_PORT=6379
 
-# AI Scenarios API (optional)
+# PostgreSQL
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost/deep_signal
+
+# AI Services (optional)
 SYNTRA_API_URL=http://localhost:8000
 SYNTRA_API_KEY=your_api_key
+SUPERVISOR_API_URL=http://localhost:8001
+STATS_API_URL=http://localhost:8002
 ```
 
 ### Running
@@ -156,95 +206,33 @@ SYNTRA_API_KEY=your_api_key
 python main.py
 ```
 
-## Usage
-
-### Main Menu
-
-```
-┌─────────────────────────────────────┐
-│  [+] Open Trade    [Chart] Positions│
-│  [Gear] Settings   [Doc] History    │
-│  [Test] Testnet/Live                │
-└─────────────────────────────────────┘
-```
-
-### Trade Wizard Flow
-
-1. **Symbol** — Select trading pair (BTC, ETH, SOL...)
-2. **Direction** — Long or Short
-3. **Entry Type** — Market or Limit
-4. **Stop Loss** — Required! By price or percentage
-5. **Risk & Leverage** — $5/$10/$15, 2x/3x/5x
-6. **Take Profit** — Single TP, Ladder, or by RR
-7. **Confirmation** — Review and execute
-
-### Position Management
-
-- View open positions with live PnL
-- Partial close (25%, 50%, 75%)
-- Move stop-loss (breakeven, trail)
-- Panic close all positions
-
-## AI Scenarios Integration
-
-The bot integrates with an external AI analytics API (Syntra AI) that provides:
-
-- **Trade scenarios** with entry, stop-loss, and take-profit levels
-- **Confidence scoring** based on market analysis
-- **One-tap execution** — apply scenario with automatic position sizing
-
-```
-┌─────────────────────────────────────────────┐
-│           SYNTRA AI (Analytics)             │
-│  - Market analysis & technical indicators   │
-│  - Trade scenarios (entry/SL/TP)            │
-│  - Confidence scoring                       │
-└─────────────────────────────────────────────┘
-                     │ JSON API
-                     ▼
-┌─────────────────────────────────────────────┐
-│           TRADE BOT (Executor)              │
-│  - Receives scenarios from AI              │
-│  - Calculates position size from risk      │
-│  - Executes via Bybit API                   │
-└─────────────────────────────────────────────┘
-```
-
-## Security
-
-- **API Keys**: Trade-only permissions, **NEVER** enable Withdraw
-- **Confirmation**: Every trade requires manual confirmation
-- **Race Protection**: Redis locks prevent duplicate orders
-- **Idempotency**: Unique `clientOrderId` for each order
-- **Rollback**: Auto-close position if SL setup fails
-- **Limits**: Configurable max risk/margin per trade
-
 ## Tech Stack
 
 | Component | Technology |
 |-----------|------------|
-| Bot Framework | aiogram 3.x |
-| Async HTTP | aiohttp |
-| Database | PostgreSQL + SQLAlchemy |
-| Cache | Redis |
+| Bot Framework | aiogram 3.x (async) |
+| Database | PostgreSQL + SQLAlchemy 2.0 |
+| Cache | Redis (hiredis) |
 | Migrations | Alembic |
 | Exchange | Bybit API V5 |
+| Logging | Loguru |
+| Precision | Decimal (no float errors) |
 
-## Risk Calculation
+## Security
 
-The bot uses the **correct** risk formula:
+- **API Keys**: Trade-only permissions, **NEVER** enable Withdraw
+- **Race Protection**: Redis locks prevent duplicate orders (TTL: 20s)
+- **Confirmation**: Every trade requires manual confirmation
+- **Idempotency**: Unique `clientOrderId` for each order
+- **Rollback**: Auto-close position if SL setup fails
+- **Owner-only**: Single-user mode for personal trading
 
-```python
-# Position size from fixed risk
-qty = risk_usd / abs(entry_price - stop_price)
+## Graceful Degradation
 
-# Required margin
-margin = (qty * entry_price) / leverage
-
-# Leverage does NOT affect PnL, only margin requirement
-```
-
-All calculations use `Decimal` for precision to avoid floating-point errors.
+- Redis optional → fallback to in-memory
+- PostgreSQL optional → Redis-only mode
+- Supervisor optional → works without advisory
+- AI Scenarios optional → manual trading available
 
 ## License
 
